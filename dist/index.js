@@ -120,7 +120,8 @@ async function pluginFactory(_input) {
                     return;
                 }
                 logIngest(`chat.message ingest len=${parts.join("\n").length} session=${_input?.sessionID}`);
-                await ingestLive(parts);
+                const sessionDir = _input?.directory || _input?.workspace?.directory || process.cwd();
+                await ingestLive(parts, sessionDir);
             }
             catch (e) {
                 logIngest(`chat.message exception ${e?.message}`);
