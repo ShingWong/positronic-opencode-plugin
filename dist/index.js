@@ -114,8 +114,42 @@ async function ingestLive(partsToIngest, dirHint) {
     }
 }
 async function pluginFactory(_input) {
-    logIngest(`pluginFactory called cwd=${process.cwd()}`);
+    logIngest(`pluginFactory called cwd=${process.cwd()} pid=${process.pid}`);
     return {
+        // Use proven hook: experimental.chat.messages.transform fires every turn (superpowers uses it)
+        "experimental.chat.messages.transform": async (_in, output) => {
+            try {
+                const msgs = output?.messages || [];
+                if (!msgs.length)
+                    return;
+                // Find last assistant message with text parts
+                const lastAssistant = [...msgs].reverse().find((m) => m?.info?.role === "assistant" || m?.role === "assistant");
+                if (!lastAssistant)
+                    return;
+                const parts = [];
+                for (const p of lastAssistant.parts || []) {
+                    if (typeof p?.text === "string" && p.text.trim())
+                        parts.push(p.text);
+                    if (typeof p?.part?.text === "string")
+                        parts.push(p.part.text);
+                }
+                // Also try info text
+                if (parts.length === 0 && typeof lastAssistant?.info?.text === "string")
+                    parts.push(lastAssistant.info.text);
+                if (parts.length === 0) {
+                    logIngest(`experimental.chat.messages.transform no parts session=${_in?.sessionID}`);
+                    return;
+                }
+                const text = parts.join("\n").slice(0, 4000).trim();
+                if (!text || text.includes("EXTREMELY_IMPORTANT"))
+                    return; // skip bootstrap
+                logIngest(`experimental.chat.messages.transform ingest len=${text.length} session=${_in?.sessionID}`);
+                await ingestLive(parts);
+            }
+            catch (e) {
+                logIngest(`experimental.chat.messages.transform exception ${e?.message}`);
+            }
+        },
         // chat.message is the correct hook for live ingestion in opencode 1.18+ (event bus only has session.*)
         "chat.message": async (_input, output) => {
             logIngest(`chat.message CALLED session=${_input?.sessionID} parts=${JSON.stringify(output?.parts || []).slice(0, 400)} msg=${JSON.stringify(output?.message || {}).slice(0, 400)}`);
@@ -323,9 +357,8 @@ async function pluginFactory(_input) {
     };
 }
 const plugin = pluginFactory;
-// Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule
+// Export as Plugin function (opencode file:// loader expects default to be the Plugin function)
 const pluginModule = { server: pluginFactory };
-void plugin;
 void pluginModule;
 void bridgePath;
 void spawnSync;
@@ -346,4 +379,4 @@ export const tui = async (api, _opts, _meta) => {
     }
     catch { }
 };
-export default pluginModule;
+export default pluginFactory;
