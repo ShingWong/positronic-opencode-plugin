@@ -301,7 +301,7 @@ async function pluginFactory(_input) {
 }
 const plugin = pluginFactory;
 // Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule
-const pluginModule = { server: pluginFactory };
+const pluginModule = { id: "positronic-opencode-plugin", server: pluginFactory };
 void plugin;
 void pluginModule;
 void bridgePath;
