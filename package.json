@@ -1,0 +1,24 @@
+{
+  "name": "positronic-opencode-plugin",
+  "version": "0.1.0-beta.1",
+  "license": "GPL-3.0-or-later",
+  "author": "Shing Wong",
+  "type": "module",
+  "bin": {
+    "positronic": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc && cp src/brains.py dist/brains.py 2>/dev/null || true && cp src/config.py dist/config.py 2>/dev/null || true",
+    "test": "pytest tests/ -q && vitest run"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.4",
+    "zod": "^3.23"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "typescript": "^5.5",
+    "vitest": "^1.6"
+  }
+}

@@ -1,0 +1,11 @@
+# PII firewall — never commit private brain state (mirrors positronic-private/.gitignore:1)
+brain_henry/state/memory.db
+brain_henry/state/*.db
+brain_henry/state/people.json
+brain_henry/state/index.jsonl
+*.db
+.positronic/brains/*/memory.db
+__pycache__/
+.pytest_cache/
+node_modules/
+*.log

@@ -1,0 +1,18 @@
+[Unit]
+Description=BGE-M3 embeddings for positronic engram (kairos_brain :8090)
+After=network.target llama.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=swong
+Group=swong
+WorkingDirectory=/usr/local/devel
+ExecStart=/home/swong/dls/.tmp/beellama-check/build-hip/bin/llama-server -m /usr/local/devel/models/embedding/bge-m3-Q8_0.gguf --embedding --pooling cls --host 127.0.0.1 --port 8090 -c 8192
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+Environment=LD_LIBRARY_PATH=/home/swong/dls/.tmp/beellama-check/build-hip/bin:/usr/local/lib
+
+[Install]
+WantedBy=multi-user.target
