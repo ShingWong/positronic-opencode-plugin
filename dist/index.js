@@ -47,9 +47,19 @@ const positronicCommands = [
 ];
 function logIngest(msg) {
     try {
-        const dir = path.join(os.homedir(), ".cache", "positronic");
-        fs.mkdirSync(dir, { recursive: true });
-        fs.appendFileSync(path.join(dir, "ingest.log"), `[${new Date().toISOString()}] ${msg}\n`);
+        const localDir = path.join(process.cwd(), ".positronic");
+        const msgLine = `[${new Date().toISOString()}] ${msg}\n`;
+        try {
+            if (fs.existsSync(localDir))
+                fs.appendFileSync(path.join(localDir, "ingest.log"), msgLine);
+        }
+        catch { }
+        try {
+            const cacheDir = path.join(os.homedir(), ".cache", "positronic");
+            fs.mkdirSync(cacheDir, { recursive: true });
+            fs.appendFileSync(path.join(cacheDir, "ingest.log"), msgLine);
+        }
+        catch { }
     }
     catch { }
 }
