@@ -46,23 +46,34 @@ const positronicCommands = [
     { title: "positronic:delete", value: "positronic:delete", description: "delete brain (warn, --force)", slash: { name: "positronic:delete" } },
 ];
 function logIngest(msg) {
+    const ts = new Date().toISOString();
+    const line = `[${ts}] ${msg}\n`;
+    // 1) project-local (always allowed, inside cwd) — primary
     try {
         const localDir = path.join(process.cwd(), ".positronic");
-        const msgLine = `[${new Date().toISOString()}] ${msg}\n`;
-        try {
-            if (fs.existsSync(localDir))
-                fs.appendFileSync(path.join(localDir, "ingest.log"), msgLine);
-        }
-        catch { }
-        try {
-            const cacheDir = path.join(os.homedir(), ".cache", "positronic");
-            fs.mkdirSync(cacheDir, { recursive: true });
-            fs.appendFileSync(path.join(cacheDir, "ingest.log"), msgLine);
-        }
-        catch { }
+        if (fs.existsSync(localDir))
+            fs.appendFileSync(path.join(localDir, "ingest.log"), line);
+    }
+    catch { }
+    // 2) tmp fallback (broadly writable)
+    try {
+        fs.mkdirSync("/tmp/positronic", { recursive: true });
+        fs.appendFileSync("/tmp/positronic-ingest.log", line);
+    }
+    catch { }
+    // 3) cache fallback (may need permission ask)
+    try {
+        const cacheDir = path.join(os.homedir(), ".cache", "positronic");
+        fs.mkdirSync(cacheDir, { recursive: true });
+        fs.appendFileSync(path.join(cacheDir, "ingest.log"), line);
     }
     catch { }
 }
+// startup probe — proves file:// plugin was loaded at all (runs at import time)
+try {
+    logIngest(`startup plugin loaded pid=${process.pid} cwd=${process.cwd()} file=${__filename}`);
+}
+catch { }
 async function ingestLive(partsToIngest, dirHint) {
     const text = partsToIngest.join("\n").slice(0, 4000).trim();
     if (!text) {
@@ -103,9 +114,11 @@ async function ingestLive(partsToIngest, dirHint) {
     }
 }
 async function pluginFactory(_input) {
+    logIngest(`pluginFactory called cwd=${process.cwd()}`);
     return {
         // chat.message is the correct hook for live ingestion in opencode 1.18+ (event bus only has session.*)
         "chat.message": async (_input, output) => {
+            logIngest(`chat.message CALLED session=${_input?.sessionID} parts=${JSON.stringify(output?.parts || []).slice(0, 400)} msg=${JSON.stringify(output?.message || {}).slice(0, 400)}`);
             try {
                 const parts = [];
                 const msg = output?.message;
@@ -138,10 +151,10 @@ async function pluginFactory(_input) {
         },
         // Generic event — session lifecycle (session.created etc) — keep for diagnostics
         event: async ({ event }) => {
+            logIngest(`event CALLED type=${event?.type} dir=${process.cwd()}`);
             const t = event?.type;
             if (!t)
                 return;
-            logIngest(`event type=${t} dir=${process.cwd()}`);
             if (t === "session.created") {
                 const dir = event?.properties?.directory || event?.directory || process.cwd();
                 try {
