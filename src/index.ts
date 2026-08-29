@@ -234,7 +234,10 @@ async function pluginFactory(_input: any) {
 
 const plugin = pluginFactory;
 
-void plugin; void bridgePath; void spawnSync;
+// Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule
+const pluginModule: any = { server: pluginFactory };
+
+void plugin; void pluginModule; void bridgePath; void spawnSync;
 
 export const tui = async (api: any, _opts: any, _meta: any) => {
   const cmds: any[] = [...positronicCommands];
@@ -251,4 +254,4 @@ export const tui = async (api: any, _opts: any, _meta: any) => {
   } catch {}
 };
 
-export default plugin;
+export default pluginModule;

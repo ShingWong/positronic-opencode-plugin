@@ -47,21 +47,9 @@ const positronicCommands = [
 ];
 function logIngest(msg) {
     try {
-        // Prefer project-local log (no external_directory permission ask) + fallback to cache
-        const localDir = path.join(process.cwd(), ".positronic");
-        const cacheDir = path.join(os.homedir(), ".cache", "positronic");
-        const msgLine = `[${new Date().toISOString()}] ${msg}\n`;
-        try {
-            if (fs.existsSync(localDir)) {
-                fs.appendFileSync(path.join(localDir, "ingest.log"), msgLine);
-            }
-        }
-        catch { }
-        try {
-            fs.mkdirSync(cacheDir, { recursive: true });
-            fs.appendFileSync(path.join(cacheDir, "ingest.log"), msgLine);
-        }
-        catch { }
+        const dir = path.join(os.homedir(), ".cache", "positronic");
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(path.join(dir, "ingest.log"), `[${new Date().toISOString()}] ${msg}\n`);
     }
     catch { }
 }
@@ -284,7 +272,10 @@ async function pluginFactory(_input) {
     };
 }
 const plugin = pluginFactory;
+// Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule
+const pluginModule = { server: pluginFactory };
 void plugin;
+void pluginModule;
 void bridgePath;
 void spawnSync;
 export const tui = async (api, _opts, _meta) => {
@@ -304,4 +295,4 @@ export const tui = async (api, _opts, _meta) => {
     }
     catch { }
 };
-export default plugin;
+export default pluginModule;
