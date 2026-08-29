@@ -46,34 +46,13 @@ const positronicCommands = [
     { title: "positronic:delete", value: "positronic:delete", description: "delete brain (warn, --force)", slash: { name: "positronic:delete" } },
 ];
 function logIngest(msg) {
-    const ts = new Date().toISOString();
-    const line = `[${ts}] ${msg}\n`;
-    // 1) project-local (always allowed, inside cwd) — primary
     try {
-        const localDir = path.join(process.cwd(), ".positronic");
-        if (fs.existsSync(localDir))
-            fs.appendFileSync(path.join(localDir, "ingest.log"), line);
-    }
-    catch { }
-    // 2) tmp fallback (broadly writable)
-    try {
-        fs.mkdirSync("/tmp/positronic", { recursive: true });
-        fs.appendFileSync("/tmp/positronic-ingest.log", line);
-    }
-    catch { }
-    // 3) cache fallback (may need permission ask)
-    try {
-        const cacheDir = path.join(os.homedir(), ".cache", "positronic");
-        fs.mkdirSync(cacheDir, { recursive: true });
-        fs.appendFileSync(path.join(cacheDir, "ingest.log"), line);
+        const dir = path.join(os.homedir(), ".cache", "positronic");
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(path.join(dir, "ingest.log"), `[${new Date().toISOString()}] ${msg}\n`);
     }
     catch { }
 }
-// startup probe — proves file:// plugin was loaded at all (runs at import time)
-try {
-    logIngest(`startup plugin loaded pid=${process.pid} cwd=${process.cwd()} file=${__filename}`);
-}
-catch { }
 async function ingestLive(partsToIngest, dirHint) {
     const text = partsToIngest.join("\n").slice(0, 4000).trim();
     if (!text) {
@@ -114,81 +93,13 @@ async function ingestLive(partsToIngest, dirHint) {
     }
 }
 async function pluginFactory(_input) {
-    logIngest(`pluginFactory called cwd=${process.cwd()} pid=${process.pid}`);
     return {
-        // Use proven hook: experimental.chat.messages.transform fires every turn (superpowers uses it)
-        "experimental.chat.messages.transform": async (_in, output) => {
-            try {
-                const msgs = output?.messages || [];
-                if (!msgs.length)
-                    return;
-                // Find last assistant message with text parts
-                const lastAssistant = [...msgs].reverse().find((m) => m?.info?.role === "assistant" || m?.role === "assistant");
-                if (!lastAssistant)
-                    return;
-                const parts = [];
-                for (const p of lastAssistant.parts || []) {
-                    if (typeof p?.text === "string" && p.text.trim())
-                        parts.push(p.text);
-                    if (typeof p?.part?.text === "string")
-                        parts.push(p.part.text);
-                }
-                // Also try info text
-                if (parts.length === 0 && typeof lastAssistant?.info?.text === "string")
-                    parts.push(lastAssistant.info.text);
-                if (parts.length === 0) {
-                    logIngest(`experimental.chat.messages.transform no parts session=${_in?.sessionID}`);
-                    return;
-                }
-                const text = parts.join("\n").slice(0, 4000).trim();
-                if (!text || text.includes("EXTREMELY_IMPORTANT"))
-                    return; // skip bootstrap
-                logIngest(`experimental.chat.messages.transform ingest len=${text.length} session=${_in?.sessionID}`);
-                await ingestLive(parts);
-            }
-            catch (e) {
-                logIngest(`experimental.chat.messages.transform exception ${e?.message}`);
-            }
-        },
-        // chat.message is the correct hook for live ingestion in opencode 1.18+ (event bus only has session.*)
-        "chat.message": async (_input, output) => {
-            logIngest(`chat.message CALLED session=${_input?.sessionID} parts=${JSON.stringify(output?.parts || []).slice(0, 400)} msg=${JSON.stringify(output?.message || {}).slice(0, 400)}`);
-            try {
-                const parts = [];
-                const msg = output?.message;
-                const outParts = output?.parts || [];
-                // Collect text from output.parts (assistant message being delivered to UI)
-                for (const p of outParts) {
-                    if (typeof p?.text === "string" && p.text.trim())
-                        parts.push(p.text);
-                    if (typeof p?.part?.text === "string")
-                        parts.push(p.part.text);
-                }
-                if (msg && typeof msg?.text === "string")
-                    parts.push(msg.text);
-                // Only ingest assistant messages
-                const role = msg?.role || msg?.info?.role;
-                if (role && String(role).toLowerCase() === "user") {
-                    logIngest(`chat.message skip user role=${role}`);
-                    return;
-                }
-                if (parts.length === 0) {
-                    logIngest(`chat.message no parts session=${_input?.sessionID}`);
-                    return;
-                }
-                logIngest(`chat.message ingest len=${parts.join("\n").length} session=${_input?.sessionID}`);
-                await ingestLive(parts);
-            }
-            catch (e) {
-                logIngest(`chat.message exception ${e?.message}`);
-            }
-        },
-        // Generic event — session lifecycle (session.created etc) — keep for diagnostics
+        // Generic event — opencode delivers session/message events here
         event: async ({ event }) => {
-            logIngest(`event CALLED type=${event?.type} dir=${process.cwd()}`);
             const t = event?.type;
             if (!t)
                 return;
+            logIngest(`event type=${t} dir=${process.cwd()}`);
             if (t === "session.created") {
                 const dir = event?.properties?.directory || event?.directory || process.cwd();
                 try {
@@ -199,13 +110,17 @@ async function pluginFactory(_input) {
             }
             if (t === "session.compacted")
                 return;
-            // Fallback: legacy message.* events if bus still emits them (pre-1.18 compat)
+            // message events: message.updated, message.part.updated, etc — ingest assistant text
             if (t.startsWith("message.")) {
                 const props = event?.properties || event;
                 const role = props?.role || props?.message?.role || (props?.part?.type === "text" ? "assistant" : undefined);
-                if (role && String(role).toLowerCase() === "user") {
-                    logIngest(`event skip: role=user type=${t}`);
-                    return;
+                // Only ingest assistant messages; skip user
+                if (role && role !== "assistant" && role !== "assistant") {
+                    // try to infer from event: if it's a user message, skip
+                    if (String(role).toLowerCase() === "user") {
+                        logIngest(`event skip: role=user type=${t}`);
+                        return;
+                    }
                 }
                 const parts = [];
                 const collect = (m) => {
@@ -357,9 +272,7 @@ async function pluginFactory(_input) {
     };
 }
 const plugin = pluginFactory;
-// Export as Plugin function (opencode file:// loader expects default to be the Plugin function)
-const pluginModule = { server: pluginFactory };
-void pluginModule;
+void plugin;
 void bridgePath;
 void spawnSync;
 export const tui = async (api, _opts, _meta) => {
@@ -379,4 +292,4 @@ export const tui = async (api, _opts, _meta) => {
     }
     catch { }
 };
-export default pluginFactory;
+export default plugin;
