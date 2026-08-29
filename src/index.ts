@@ -79,7 +79,35 @@ async function ingestLive(partsToIngest: string[], dirHint?: string) {
 
 async function pluginFactory(_input: any) {
   return {
-    // Generic event — opencode delivers session/message events here
+    // chat.message is the correct hook for live ingestion in opencode 1.18+ (event bus only has session.*)
+    "chat.message": async (_input: any, output: any) => {
+      try {
+        const parts: string[] = [];
+        const msg = output?.message;
+        const outParts: any[] = output?.parts || [];
+        // Collect text from output.parts (assistant message being delivered to UI)
+        for (const p of outParts) {
+          if (typeof p?.text === "string" && p.text.trim()) parts.push(p.text);
+          if (typeof p?.part?.text === "string") parts.push(p.part.text);
+        }
+        if (msg && typeof (msg as any)?.text === "string") parts.push((msg as any).text);
+        // Only ingest assistant messages
+        const role = (msg as any)?.role || (msg as any)?.info?.role;
+        if (role && String(role).toLowerCase() === "user") {
+          logIngest(`chat.message skip user role=${role}`);
+          return;
+        }
+        if (parts.length === 0) {
+          logIngest(`chat.message no parts session=${_input?.sessionID}`);
+          return;
+        }
+        logIngest(`chat.message ingest len=${parts.join("\n").length} session=${_input?.sessionID}`);
+        await ingestLive(parts);
+      } catch (e: any) {
+        logIngest(`chat.message exception ${e?.message}`);
+      }
+    },
+    // Generic event — session lifecycle (session.created etc) — keep for diagnostics
     event: async ({ event }: any) => {
       const t = event?.type as string | undefined;
       if (!t) return;
@@ -90,15 +118,11 @@ async function pluginFactory(_input: any) {
         return;
       }
       if (t === "session.compacted") return;
-      // message events: message.updated, message.part.updated, etc — ingest assistant text
+      // Fallback: legacy message.* events if bus still emits them (pre-1.18 compat)
       if (t.startsWith("message.")) {
         const props: any = (event as any)?.properties || event;
         const role = props?.role || props?.message?.role || (props?.part?.type === "text" ? "assistant" : undefined);
-        // Only ingest assistant messages; skip user
-        if (role && role !== "assistant" && role !== "assistant") {
-          // try to infer from event: if it's a user message, skip
-          if (String(role).toLowerCase() === "user") { logIngest(`event skip: role=user type=${t}`); return; }
-        }
+        if (role && String(role).toLowerCase() === "user") { logIngest(`event skip: role=user type=${t}`); return; }
         const parts: string[] = [];
         const collect = (m: any) => {
           if (!m) return;
@@ -234,7 +258,10 @@ async function pluginFactory(_input: any) {
 
 const plugin = pluginFactory;
 
-void plugin; void bridgePath; void spawnSync;
+// Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule
+const pluginModule: any = { server: pluginFactory };
+
+void plugin; void pluginModule; void bridgePath; void spawnSync;
 
 export const tui = async (api: any, _opts: any, _meta: any) => {
   const cmds: any[] = [...positronicCommands];
@@ -251,4 +278,4 @@ export const tui = async (api: any, _opts: any, _meta: any) => {
   } catch {}
 };
 
-export default plugin;
+export default pluginModule;
