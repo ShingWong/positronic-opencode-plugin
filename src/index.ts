@@ -48,6 +48,7 @@ const positronicCommands = [
   { title: "positronic:llm-setup", value: "positronic:llm-setup", description: "tier guide (1 lexical, 2 remote, 3 local 606MB)", slash: { name: "positronic:llm-setup" } },
   { title: "positronic:update", value: "positronic:update", description: "deferred update --check/--tail/--status", slash: { name: "positronic:update" } },
   { title: "positronic:delete", value: "positronic:delete", description: "delete brain (warn, --force)", slash: { name: "positronic:delete" } },
+  { title: "positronic:query", value: "positronic:query", description: "query brain (text/FTS5/SQL/anchors/objects/sightings)", slash: { name: "positronic:query" } },
 ] as const;
 
 function logIngest(msg: string) {
@@ -238,6 +239,16 @@ async function pluginFactory(_input: any) {
           const { run } = await import("./commands/delete.js");
           const dir = args?.dir || ctx?.directory || process.cwd();
           const r = await run({ dir, brain: args?.brain, force: args?.force, json: true } as any);
+          return JSON.stringify(r.json);
+        },
+      },
+      "positronic.query": {
+        description: "query brain: text/FTS, --sql, --anchors, --objects, --sightings",
+        args: {},
+        execute: async (args: any, ctx: any) => {
+          const { runQuery } = await import("./commands/query.js");
+          const dir = args?.dir || ctx?.directory || process.cwd();
+          const r = await runQuery({ dir, brain: args?.brain, qtext: args?.text || args?.query, sql: args?.sql, cue: args?.cue, objects: args?.objects, anchors: args?.anchors, sightings: args?.sightings, k: args?.k || 8, json: true } as any);
           return JSON.stringify(r.json);
         },
       },
