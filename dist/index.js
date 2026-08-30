@@ -85,7 +85,15 @@ async function ingestLive(partsToIngest, dirHint) {
     }
     try {
         logIngest(`ingest start brain=${brainName} dir=${dir} len=${text.length} db=${db}`);
-        const script = `import sys; sys.path.insert(0, '${"/usr/local/devel/positronic/positronic-engram/engine/src"}'); from memeng.store import SQLiteStore; from memeng.engine import MemoryEngine; from memeng.models import Event; from datetime import datetime, timezone; s=SQLiteStore(${JSON.stringify(db)}); e=MemoryEngine(s); r=e.new_event(Event(stream='positronic:${brainName}',kind='message',persons=['p_kairos'],wall=datetime.now(timezone.utc),features={'subject_norm': ${JSON.stringify(text.slice(0, 80))}, 'body_text': ${JSON.stringify(text)}, 'arousal': 0.5})); print(r.tau)`;
+        // Resolve engram src relative to plugin location (works on both /usr/local/devel/positronic and ~/.local/share/positronic layouts)
+        const candidates = [
+            path.resolve(__dirname, "..", "..", "positronic-engram", "engine", "src"),
+            path.resolve(__dirname, "..", "positronic-engram", "engine", "src"),
+            "/usr/local/devel/positronic/positronic-engram/engine/src",
+            path.join(os.homedir(), ".local", "share", "positronic", "positronic-engram", "engine", "src"),
+        ];
+        const engramSrc = candidates.find(p => fs.existsSync(path.join(p, "memeng", "engine.py"))) || candidates[0];
+        const script = `import sys; sys.path.insert(0, ${JSON.stringify(engramSrc)}); from memeng.store import SQLiteStore; from memeng.engine import MemoryEngine; from memeng.models import Event; from datetime import datetime, timezone; s=SQLiteStore(${JSON.stringify(db)}); e=MemoryEngine(s); r=e.new_event(Event(stream='positronic:${brainName}',kind='message',persons=['p_kairos'],wall=datetime.now(timezone.utc),features={'subject_norm': ${JSON.stringify(text.slice(0, 80))}, 'body_text': ${JSON.stringify(text)}, 'arousal': 0.5})); print(r.tau)`;
         const out = spawnSync("python3", ["-c", script], { timeout: 4000, encoding: "utf-8" });
         logIngest(`ingest done brain=${brainName} status=${out.status} stdout=${(out.stdout || "").slice(0, 200)} stderr=${(out.stderr || "").slice(0, 300)}`);
     }
