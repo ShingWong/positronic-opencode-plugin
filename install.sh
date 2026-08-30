@@ -75,10 +75,10 @@ cd "$PLUGIN_DIR"
 npm install --silent 2>&1 | tail -n 5 || npm install 2>&1 | tail -n 20
 npm run build 2>&1 | tail -n 10
 
-# optional python dep (best-effort)
+# optional python dep (best-effort, handles PEP 668)
 if [ -f "$ENGRAM_DIR/engine/pyproject.toml" ]; then
   log "Installing engram python package (best-effort)..."
-  pip install -q -e "$ENGRAM_DIR/engine" 2>&1 | tail -n 5 || warn "pip install -e engram failed (you can run manually: pip install -e $ENGRAM_DIR/engine)"
+  pip install -q --break-system-packages -e "$ENGRAM_DIR/engine" 2>&1 | tail -n 5 || pip install -q -e "$ENGRAM_DIR/engine" 2>&1 | tail -n 5 || warn "pip install -e engram failed (you can run manually: pip install --break-system-packages -e $ENGRAM_DIR/engine)"
 fi
 
 # --- opencode config ---
@@ -116,11 +116,15 @@ PY
     python3 - "$TARGET" "$PLUGIN_URI" <<'PY' 2>/dev/null || true
 import pathlib, re, sys
 p, uri = pathlib.Path(sys.argv[1]), sys.argv[2]
-t = p.read_text()
-if '"plugin"' in t:
-    t = re.sub(r'"plugin"\s*:\s*\[', f'"plugin": ["{uri}", ', t)
-else:
-    t = t.rstrip().rstrip('}').rstrip(',') + f',\n  "plugin": ["{uri}"]\n}}\n'
+t = p.read_text().strip()
+# remove trailing } for injection
+if t.endswith('}'):
+    t = t[:-1].rstrip()
+# ensure no trailing comma before adding
+t = t.rstrip().rstrip(',')
+if not t.endswith('{'):
+    t += ','
+t += f'\n  "plugin": ["{uri}"]\n}}\n'
 p.write_text(t)
 print("injected")
 PY
