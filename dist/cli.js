@@ -154,14 +154,36 @@ else if (cmd === "delete") {
     if (!out.json.ok)
         process.exitCode = 1;
 }
+else if (cmd === "query") {
+    const { runQuery } = await import("./commands/query.js");
+    const brain = flag("--brain") || "kairos";
+    // positional text OR --sql <sql> OR --cue <text> (activate) OR --objects | --anchors | --sightings
+    const qtext = args.find((a) => !a.startsWith("-")) || "";
+    const sql = flag("--sql");
+    const cue = flag("--cue");
+    const objects = has("--objects");
+    const anchors = has("--anchors");
+    const sightings = has("--sightings");
+    const k = flag("--k") ? parseInt(flag("--k"), 10) : 8;
+    const out = await runQuery({ dir: process.cwd(), brain, qtext, sql, cue, objects, anchors, sightings, k, json: true });
+    if (useJson)
+        console.log(JSON.stringify(out.json, null, 2));
+    else
+        console.log(out.human);
+}
 else {
     console.log("Usage: positronic <verb> [--json] [--brain <name>] ...");
-    console.log("  verbs: info | stats | config | brain-test | llm-stat | llm-setup | update | doctor | init | delete");
+    console.log("  verbs: info | stats | config | brain-test | llm-stat | llm-setup | update | doctor | init | delete | query");
     console.log("  examples:");
     console.log("    positronic info --json");
     console.log("    positronic stats --brain kairos --json");
     console.log("    positronic config profile archival --brain kairos --confirm --json");
     console.log("    positronic brain-test --k 3 --json");
+    console.log("    positronic query \"memory engine\" --brain kairos --k 8 --json");
+    console.log("    positronic query --sql \"SELECT COUNT(*) AS n FROM episode\" --brain kairos --json");
+    console.log("    positronic query --anchors --brain kairos --json");
+    console.log("    positronic query --objects --brain kairos --json");
+    console.log("    positronic query --sightings --brain kairos --json");
     console.log("    positronic llm-stat --json");
     console.log("    positronic llm-setup --tier 3 --json");
     console.log("    positronic update --check --json | --tail 50 | --status <jobId>");
