@@ -21,6 +21,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { getEmbedder } from "./embed.js";
 import { run as infoRun } from "./commands/info.js";
@@ -153,17 +154,34 @@ async function pluginFactory(_input: any) {
     tool: {
       "positronic.init": {
         description: "init .positronic/brains (warn if exists, --force to overwrite; --live/--no-live)",
-        args: {},
+        args: {
+          brain: z.string().optional().describe("brain name (default kairos)"),
+          profile: z.string().optional().describe("retention balanced|long_term|archival|short_term"),
+          embed: z.string().optional().describe("embed lexical|local|remote"),
+          force: z.boolean().optional().describe("overwrite existing brain"),
+          live: z.boolean().optional().describe("enable live ingestion (false for --no-live)"),
+          dir: z.string().optional().describe("project directory"),
+          brains: z.array(z.object({ name: z.string(), profile: z.string(), embed: z.string() })).optional().describe("explicit brains array (advanced)"),
+        },
         execute: async (args: any, ctx: any) => {
           const { run } = await import("./commands/init.js");
           const dir = args?.dir || ctx?.directory || process.cwd();
-          const r = await run({ dir, force: args?.force, json: true, live: args?.live, brains: args?.brains });
+          // Map flat --brain/--profile/--embed flags to brains array (CLI parity)
+          let brains = args?.brains;
+          if ((!brains || (Array.isArray(brains) && brains.length === 0)) && (args?.brain || args?.profile || args?.embed)) {
+            brains = [{ name: args.brain || "kairos", profile: args.profile || "balanced", embed: args.embed || "lexical" }];
+          }
+          const r = await run({ dir, force: args?.force, json: true, live: args?.live, brains });
           return JSON.stringify(r.json);
         },
       },
       "positronic.recall": {
         description: "fused recall across federated brains",
-        args: {},
+        args: {
+          dir: z.string().optional().describe("project directory"),
+          text: z.string().describe("query text"),
+          k: z.number().optional().describe("top-k"),
+        },
         execute: async ({ dir, text, k }: { dir: string; text: string; k?: number }) => {
           const cfg: any = loadConfig(dir);
           void (await getEmbedder(cfg).catch(() => null));
@@ -173,7 +191,10 @@ async function pluginFactory(_input: any) {
       },
       "positronic.ask": {
         description: "object dossier",
-        args: {},
+        args: {
+          dir: z.string().optional().describe("project directory"),
+          object: z.string().describe("object name"),
+        },
         execute: async ({ dir, object }: { dir: string; object: string }) => {
           void dir; void object;
           return { found: false, episodes: [] as any[] };
@@ -181,7 +202,9 @@ async function pluginFactory(_input: any) {
       },
       "positronic.info": {
         description: "positronic info --json (version, ENGRAM_TAG, brains, tiers)",
-        args: {},
+        args: {
+          dir: z.string().optional().describe("project directory"),
+        },
         execute: async (args: any, ctx: any) => {
           const dir = args?.dir || ctx?.directory || process.cwd();
           const r = await infoRun({ dir, json: true } as any);
@@ -190,7 +213,10 @@ async function pluginFactory(_input: any) {
       },
       "positronic.stats": {
         description: "federated stats --json (episodes per brain)",
-        args: {},
+        args: {
+          brain: z.string().optional().describe("brain name"),
+          dir: z.string().optional().describe("project directory"),
+        },
         execute: async (args: any, ctx: any) => {
           const dir = args?.dir || ctx?.directory || process.cwd();
           const r = await statsRun({ dir, brain: args?.brain, json: true } as any);
@@ -199,7 +225,13 @@ async function pluginFactory(_input: any) {
       },
       "positronic.config": {
         description: "get/set .positronic/config.json (profile confirm gate, PII blocked)",
-        args: {},
+        args: {
+          brain: z.string().optional().describe("brain name"),
+          key: z.string().optional().describe("config key"),
+          value: z.string().optional().describe("config value"),
+          confirm: z.boolean().optional().describe("confirm overwrite"),
+          dir: z.string().optional().describe("project directory"),
+        },
         execute: async (args: any, ctx: any) => {
           const dir = args?.dir || ctx?.directory || process.cwd();
           const r = await cfgRun({ dir, brain: args?.brain, key: args?.key, value: args?.value, confirm: args?.confirm, json: true } as any);
@@ -208,7 +240,11 @@ async function pluginFactory(_input: any) {
       },
       "positronic.brain-test": {
         description: "smoke probe new_event -> activate",
-        args: {},
+        args: {
+          brain: z.string().optional().describe("brain name"),
+          k: z.number().optional().describe("top-k"),
+          dir: z.string().optional().describe("project directory"),
+        },
         execute: async (args: any, ctx: any) => {
           const dir = args?.dir || ctx?.directory || process.cwd();
           const r = await btRun({ dir, brain: args?.brain || "kairos", k: args?.k || 3, json: true } as any);
@@ -225,7 +261,9 @@ async function pluginFactory(_input: any) {
       },
       "positronic.llm-setup": {
         description: "tier guide (606MB bge-m3)",
-        args: {},
+        args: {
+          tier: z.string().optional().describe("tier 1|2|3"),
+        },
         execute: async (args: any) => {
           const r = await lsuRun({ tier: args?.tier || "3", json: true } as any);
           return JSON.stringify(r.json);
@@ -233,7 +271,13 @@ async function pluginFactory(_input: any) {
       },
       "positronic.update": {
         description: "deferred update --check/--status/--tail",
-        args: {},
+        args: {
+          check: z.boolean().optional().describe("check for update"),
+          pin: z.string().optional().describe("pin version"),
+          status: z.string().optional().describe("job id"),
+          tail: z.number().optional().describe("tail lines"),
+          dir: z.string().optional().describe("project directory"),
+        },
         execute: async (args: any, ctx: any) => {
           const dir = args?.dir || ctx?.directory || process.cwd();
           const r = await updRun({ check: args?.check, pin: args?.pin, status: args?.status, tail: args?.tail, json: true, dir } as any);
@@ -242,7 +286,11 @@ async function pluginFactory(_input: any) {
       },
       "positronic.delete": {
         description: "delete brain (warn, --force to confirm)",
-        args: {},
+        args: {
+          brain: z.string().optional().describe("brain name"),
+          force: z.boolean().optional().describe("confirm delete"),
+          dir: z.string().optional().describe("project directory"),
+        },
         execute: async (args: any, ctx: any) => {
           const { run } = await import("./commands/delete.js");
           const dir = args?.dir || ctx?.directory || process.cwd();
@@ -252,7 +300,18 @@ async function pluginFactory(_input: any) {
       },
       "positronic.query": {
         description: "query brain: text/FTS, --sql, --anchors, --objects, --sightings",
-        args: {},
+        args: {
+          brain: z.string().optional().describe("brain name"),
+          text: z.string().optional().describe("query text"),
+          query: z.string().optional().describe("alias for text"),
+          sql: z.string().optional().describe("SQL query"),
+          cue: z.string().optional().describe("cue text"),
+          objects: z.boolean().optional().describe("list objects"),
+          anchors: z.boolean().optional().describe("list anchors"),
+          sightings: z.boolean().optional().describe("list sightings"),
+          k: z.number().optional().describe("top-k"),
+          dir: z.string().optional().describe("project directory"),
+        },
         execute: async (args: any, ctx: any) => {
           const { runQuery } = await import("./commands/query.js");
           const dir = args?.dir || ctx?.directory || process.cwd();
