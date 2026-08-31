@@ -28,7 +28,7 @@ positronic init --brain research --profile archival --embed remote --force --jso
 # Every brain ingests live by default — /usr/local/devel/positronic lives, brain_henry/state/memory.db is test data (to be deleted)
 ```
 
-9 flat commands. Same `src/commands/*: run` backs slash palette `/positronic:<verb>`, agentic `tool_call`, and shell `positronic <verb>`.
+11 flat commands. Same `src/commands/*: run` backs slash palette `/positronic:<verb>`, agentic `tool_call`, and shell `positronic <verb>`.
 
 | Slash (palette ` /`) | Tool (`tool_call`) | CLI | Flags | Output (`--json`) |
 |---|---|---|---|---|
@@ -40,6 +40,8 @@ positronic init --brain research --profile archival --embed remote --force --jso
 | `/positronic:llm-stat` | `positronic.llm-stat` | `positronic llm-stat` | `[--json]` | `{bge, llama, lexical, engram, pooling:cls|unknown}` (:8090 health, `bge-m3-Q8_0.gguf` dim 1024, pooling `cls` warning) |
 | `/positronic:llm-setup` | `positronic.llm-setup` | `positronic llm-setup` | `[--tier 1|2|3] [--json]` | `{tier, guide}` + human slice of `docs/llama.md` (Tier 3: `606MB bge-m3-Q8_0.gguf` + `bge-embed.service Restart=always`, no auto-build) |
 | `/positronic:update` | `positronic.update` | `positronic update` | `[--check] [--status <jobId>] [--tail N] [--pin v0.2.x] [--json]` | `--check:{behind,engramTagDiff,npmOutdated}` dry `git ls-remote`; default spawns `~/.cache/positronic/update-<jobId>.log`, returns `{jobId,status,logPath}`; `--status/--tail` polls log |
+| `/positronic:prune` | `positronic.prune` | `positronic prune` | `[--json]` | τ-decay `engine.prune()` on the live brain (skips `live:false`); `{ok, brain, scanned, day_merged, week_merged, expired, residues, objects_dormant, objects_forgotten}` |
+| `/positronic:consolidate` | `positronic.consolidate` | `positronic consolidate "<summary>"` | `[--brain <name>] [--arousal N] [--json]` | writes `kind='consolidation'` event; `{ok, brain, tau, encoded, episode_id}`; empty summary → `{ok:false}` |
 
 ## `--json` examples
 
@@ -90,13 +92,14 @@ positronic update --tail 50 --json         # {"logTail":[...]}
 
 ## Notes
 
-- Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:init"}` (8 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
+- Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (11 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
 - CLI `dist/cli.js` dispatches `positronic <verb>` → same `run` (parity `--tail/--check/--status`).
+- `session.compacted` → `compactBrain`: `prune` live brain + `"session compacted <id>"` consolidation marker (`~/.cache/positronic/prune.log`).
 - PII: `config` refuses `*.db` / `memory.db` / `brain_henry`; `remote_key` masked unless `--show-secrets`.
 - Deferred `update` uses `~/.cache/positronic/update-<jobId>.log` + `.lock`, polled not SSE.
 
 ## Deferred next feature
 
-`export [brain] (--format jsonl|sqlite)`, `import <file> [--dry-run]`, grouped `test+verify` (`engram-verify --deep` = `memeng` + `FTS + HNSW` + DB integrity suite), `prune [--tau]`, `forget <object>`, true streaming SSE — all post-v1 when `update` polling proves sufficient. `docs/llama.md` unchanged (consumed by `llm-setup`).
+`export [brain] (--format jsonl|sqlite)`, `import <file> [--dry-run]`, grouped `test+verify` (`engram-verify --deep` = `memeng` + `FTS + HNSW` + DB integrity suite), `forget <object>`, true streaming SSE — all post-v1 when `update` polling proves sufficient. `docs/llama.md` unchanged (consumed by `llm-setup`).
 
 Legacy tools still present: `positronic.recall` / `positronic.ask` (thin wrappers) superseded by flat commands for daily use.

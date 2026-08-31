@@ -32,9 +32,9 @@ The opencode plugin (`src/index.ts`) wires the same lifecycle:
 
 - `session.created` → `wake()` if `.positronic/brains/*/memory.db` exists else `positronic init` wizard
 - `chat.message` → `ingestLive` every assistant turn (`tau` advances on arousal/novelty) — non-TTY `opencode run:1` does NOT deliver `chat.message:83:1`
-- `event` → `session.created/session.compacted` diagnostics (TTY only)
-- tools: `positronic.recall`, `positronic.ask` + flat `positronic.*` (see `docs/commands.md`)
-- slashes: 9 flat `{ title: "positronic:*", slash: { name: "positronic:*" } }` palette entries (`src/index.ts:24:1` positronicCommands, `src/commands/*: run`)
+- `event` → `session.compacted` → `compactBrain` (fire-and-forget): `prune` the live brain + write a consolidation boundary marker (`~/.cache/positronic/prune.log`)
+- tools: `positronic.recall`, `positronic.ask`, `positronic.prune`, `positronic.consolidate` + flat `positronic.*` (see `docs/commands.md`)
+- slashes: 11 flat `{ title: "positronic:*", slash: { name: "positronic:*" } }` palette entries (`src/index.ts:24:1` positronicCommands, `src/commands/*: run`)
 - CLI: `positronic <verb> --json | --sql | --anchors | --objects | --sightings` (`dist/cli.ts`)
 
 ### Improving recall — use the `query` verb
@@ -67,6 +67,8 @@ positronic query --sql "SELECT COUNT(*) c FROM episode" --brain kairos --json
 | `/positronic:llm-setup` | `positronic.llm-setup` | `positronic llm-setup --tier 3 --json` | guide `606MB bge-m3-Q8_0.gguf` |
 | `/positronic:update` | `positronic.update` | `positronic update [--check|--tail 50|--status <jobId>] --json` | deferred `~/.cache/positronic/update-<jobId>.log` |
 | `/positronic:delete` | `positronic.delete` | `positronic delete --brain <name> --force` | wipe brain + db |
+| `/positronic:prune` | `positronic.prune` | `positronic prune --json` | run τ-decay `engine.prune()` on the live brain; `{scanned, day_merged, week_merged, expired, residues, objects_dormant, objects_forgotten}`; skips `live:false` |
+| `/positronic:consolidate` | `positronic.consolidate` | `positronic consolidate "<summary>" [--arousal N] --json` | write `kind='consolidation'` event (`tau` advances; `{tau, encoded, episode_id}`); compaction auto-writes `"session compacted <id>"` marker |
 
 Deferred next feature: `export`, `import`, grouped `test+verify` (`engram-verify --deep` suite) — post-v1 when `update` polling proves sufficient.
 

@@ -30,6 +30,8 @@ import { run as btRun } from "./commands/brainTest.js";
 import { run as lsRun } from "./commands/llmStat.js";
 import { run as lsuRun } from "./commands/llmSetup.js";
 import { run as updRun } from "./commands/update.js";
+import { run as pruneRun } from "./commands/prune.js";
+import { run as consRun } from "./commands/consolidate.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 function bridgePath(name) {
@@ -46,6 +48,8 @@ const positronicCommands = [
     { title: "positronic:update", value: "positronic:update", description: "deferred update --check/--tail/--status", slash: { name: "positronic:update" } },
     { title: "positronic:delete", value: "positronic:delete", description: "delete brain (warn, --force)", slash: { name: "positronic:delete" } },
     { title: "positronic:query", value: "positronic:query", description: "query brain (text/FTS5/SQL/anchors/objects/sightings)", slash: { name: "positronic:query" } },
+    { title: "positronic:prune", value: "positronic:prune", description: "run τ-decay pruning on the live brain", slash: { name: "positronic:prune" } },
+    { title: "positronic:consolidate", value: "positronic:consolidate", description: "write a consolidation summary event", slash: { name: "positronic:consolidate" } },
 ];
 function logIngest(msg) {
     try {
@@ -102,6 +106,28 @@ async function ingestLive(partsToIngest, dirHint) {
         logIngest(`ingest exception brain=${brainName} err=${e?.message}`);
     }
 }
+function logPrune(msg) {
+    try {
+        const dir = path.join(os.homedir(), ".cache", "positronic");
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(path.join(dir, "prune.log"), `[${new Date().toISOString()}] ${msg}\n`);
+    }
+    catch { }
+}
+async function compactBrain(dir, sessionID) {
+    try {
+        const pr = await pruneRun({ dir, json: true });
+        logPrune(`compact prune dir=${dir} ${JSON.stringify(pr.json)}`);
+        const marker = `session compacted ${sessionID}`.trim();
+        if (marker) {
+            const cr = await consRun({ dir, text: marker, arousal: 0.2, json: true });
+            logPrune(`compact marker dir=${dir} ${JSON.stringify(cr.json)}`);
+        }
+    }
+    catch (e) {
+        logPrune(`compact exception dir=${dir} err=${e?.message}`);
+    }
+}
 async function pluginFactory(_input) {
     return {
         // chat.message is the correct hook for live ingestion in opencode 1.18+ (event bus only has session.*)
@@ -151,8 +177,12 @@ async function pluginFactory(_input) {
                 catch { }
                 return;
             }
-            if (t === "session.compacted")
+            if (t === "session.compacted") {
+                const dir = event?.properties?.info?.directory || event?.properties?.directory || event?.directory || process.cwd();
+                const sessionID = event?.properties?.sessionID || "";
+                void compactBrain(dir, sessionID);
                 return;
+            }
             // Fallback: legacy message.* events if bus still emits them (pre-1.18 compat)
             if (t.startsWith("message.")) {
                 const props = event?.properties || event;
@@ -359,6 +389,31 @@ async function pluginFactory(_input) {
                     const { runQuery } = await import("./commands/query.js");
                     const dir = args?.dir || ctx?.directory || process.cwd();
                     const r = await runQuery({ dir, brain: args?.brain, qtext: args?.text || args?.query, sql: args?.sql, cue: args?.cue, objects: args?.objects, anchors: args?.anchors, sightings: args?.sightings, k: args?.k || 8, json: true });
+                    return JSON.stringify(r.json);
+                },
+            },
+            "positronic.prune": {
+                description: "run τ-decay pruning on the live brain",
+                args: {
+                    dir: z.string().optional().describe("project directory"),
+                },
+                execute: async (args, ctx) => {
+                    const dir = args?.dir || ctx?.directory || process.cwd();
+                    const r = await pruneRun({ dir, json: true });
+                    return JSON.stringify(r.json);
+                },
+            },
+            "positronic.consolidate": {
+                description: "write a consolidation summary event",
+                args: {
+                    text: z.string().describe("summary text"),
+                    arousal: z.number().optional().describe("arousal 0..1 (default 0.4)"),
+                    brain: z.string().optional().describe("brain name"),
+                    dir: z.string().optional().describe("project directory"),
+                },
+                execute: async (args, ctx) => {
+                    const dir = args?.dir || ctx?.directory || process.cwd();
+                    const r = await consRun({ dir, brain: args?.brain, text: args?.text || "", arousal: args?.arousal, json: true });
                     return JSON.stringify(r.json);
                 },
             },

@@ -128,9 +128,22 @@ if (cmd === "init") {
     const k = flag("--k") ? parseInt(flag("--k") as string, 10) : 8;
     const out = await runQuery({ dir: process.cwd(), brain, qtext, sql, cue, objects, anchors, sightings, k, json: true });
     if (useJson) console.log(JSON.stringify(out.json, null, 2)); else console.log(out.human);
+  } else if (cmd === "prune") {
+    const m = await import("./commands/prune.js");
+    const out = await m.run({ dir: process.cwd(), json: true });
+    if (useJson) console.log(JSON.stringify(out.json, null, 2)); else console.log(out.human);
+    if (!out.json.ok) process.exitCode = 1;
+  } else if (cmd === "consolidate") {
+    const m = await import("./commands/consolidate.js");
+    const brain = flag("--brain");
+    const arousal = flag("--arousal") ? parseFloat(flag("--arousal") as string) : 0.4;
+    const text = args.find((a) => !a.startsWith("-")) || "";
+    const out = await m.run({ dir: process.cwd(), brain, text, arousal, json: true });
+    if (useJson) console.log(JSON.stringify(out.json, null, 2)); else console.log(out.human);
+    if (!out.json.ok) process.exitCode = 1;
   } else {
   console.log("Usage: positronic <verb> [--json] [--brain <name>] ...");
-    console.log("  verbs: info | stats | config | brain-test | llm-stat | llm-setup | update | doctor | init | delete | query");
+    console.log("  verbs: info | stats | config | brain-test | llm-stat | llm-setup | update | doctor | init | delete | query | prune | consolidate");
   console.log("  examples:");
     console.log("    positronic info --json");
     console.log("    positronic stats --brain kairos --json");
@@ -145,4 +158,6 @@ if (cmd === "init") {
     console.log("    positronic llm-setup --tier 3 --json");
     console.log("    positronic update --check --json | --tail 50 | --status <jobId>");
     console.log("    positronic delete --brain <name> --force");
+    console.log("    positronic prune --json");
+    console.log("    positronic consolidate \"session summary text\" --arousal 0.4 --json");
 }
