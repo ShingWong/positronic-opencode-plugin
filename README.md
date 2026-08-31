@@ -64,7 +64,7 @@ Two honest numbers, two different layers:
   (ingest ~550 messages, embed, two LLM passes, judge).
   Recall `0.58` with memory vs `0.14` without → **Δ 0.44**.
 
-Bonus: top-8 retrieval uses **~242 tokens** vs **~4,496** for the full haystack — about **1/20th** of the context at 32k.
+Bonus: top-8 retrieval uses a flat **~242 tokens** vs the full haystack (which grows from **~2,249** at 4k to **~18,000** at 32k) — about **1/10th to 1/74th** of the context, with recall@1 1.0.
 
 > The store is instant. The pipeline takes what the LLMs take. Both are real.
 
