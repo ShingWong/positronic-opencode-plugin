@@ -90,6 +90,17 @@ positronic update --tail 50 --json         # {"logTail":[...]}
 {"positronic.update": {"tail": 50, "json": true}}
 ```
 
+## Polytemporal objects — recall digest, ask depth
+
+- `recall "<cue>"` returns live matches **plus an `object` block** when the cue
+  fuzzy-matches an object. The block is a digest, not the data:
+  `{canonical_name, kind, status, versions:{sighting_count, tau_span, latest_consolidation, oldest_tau}}`.
+- An **object is a family of τ-ordered sightings** (messages + consolidations).
+  `ask "<object>"` returns the full dossier — every sighting with its own
+  `tau`/`wall`/`kind`. Use it to dig deeper when the digest isn't enough.
+- The latest consolidation is the distilled version; older τ = earlier truths.
+  Choosing which version answers the query is the agent's job, not the engine's.
+
 ## Notes
 
 - Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (11 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).

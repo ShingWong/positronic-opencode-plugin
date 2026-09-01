@@ -63,6 +63,25 @@ positronic query --sql "SELECT COUNT(*) c FROM episode" --brain kairos --json
 - Anchor events (`salience >= anchor_salience:1`, `is_anchor=1:1`) are the durable memory hooks — follow `anchor_edge.is_anchor:1`
 - Objects (`get_or_create_object dedupe 610:1`) auto-extracted from anchor text — reuse node IDs
 
+### Polytemporal objects — recall returns a digest, `ask` reveals depth
+
+An **object is a family of time-stamped sightings** (messages + consolidations
+pointing at one canonical entity). The engine preserves the family; the agent
+(the frontal lobe) decides how deep to dig:
+
+- `recall "<cue>"` returns the live matches **plus an `object` block** when the
+  cue fuzzy-matches an object. The block is a **digest, not the data**:
+  `{canonical_name, kind, status, versions:{sighting_count, tau_span, latest_consolidation, oldest_tau}}`.
+  Read the digest to know *polytemporal depth exists* — do not assume the
+  latest consolidation is the whole truth.
+- When the digest is not enough, **dig deeper**: `ask "<object>"` returns the
+  full τ-ordered dossier — every sighting with its own `tau`, `wall`, `kind`.
+  This is the same move as opening older commits when debugging which version
+  caused a bug: read the headline first, then decide how far back to go.
+- The **latest consolidation** is the distilled version of the object; older
+  τ sightings are earlier truths. Which one answers the current query is the
+  agent's call — that is the polytemporal judgment the engine cannot make.
+
 ## Commands (flat, `--json` + tool_call)
 
 | Slash (`/`) palette | Tool | CLI | Notes |
