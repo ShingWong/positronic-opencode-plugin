@@ -29,6 +29,7 @@ Just deterministic, auditable, tensor-grounded memory.
 - [Real-world: email at scale](#real-world-email-at-scale)
 - [Install](#install)
 - [Quick start](#quick-start)
+- [AGENTS.md setup (recommended)](#agentsmd-setup-recommended)
 - [Commands](#commands)
 - [Build with Positronic-Engram](#build-with-positronic-engram)
 - [License](#license)
@@ -191,6 +192,44 @@ positronic init --brain kairos --profile balanced --embed lexical
 positronic query "memory engine" --brain kairos --k 8 --json
 positronic stats --json
 ```
+
+---
+
+## AGENTS.md setup (recommended)
+
+The plugin captures and prunes automatically (live hooks per session), but the
+agent only *retrieves* if something tells it to. Add one rule to your project's
+`AGENTS.md` so it reaches for the brain instead of re-deriving. Retrieval is
+single-digit milliseconds; re-reading a codebase from scratch is not.
+
+```markdown
+## Dogfooding: recall before resuming (mandatory)
+
+Before resuming work in this repo — a new task, a follow-up edit, or an
+executing-plans session — run the brain first to ground in prior decisions
+instead of re-reading files from scratch:
+
+    positronic recall "<topic>" --json     # or python -m positronic_ai recall ...
+
+    # distilled memory first:   positronic recall "<topic>" --consolidation only
+    # object history:           positronic ask "<object>"
+
+Retrieval is fast (single-digit ms) and surfaces the session decisions live
+ingestion already captured. This rule binds the main agent and every subagent:
+query/recall before you re-derive. Plan docs should carry a recall step too.
+```
+
+Key points:
+
+- **Recall, don't re-read.** Ingestion is automatic; retrieval is the cheap operation.
+- **Bind every agent.** State the rule so subagents inherit it — a main agent that recalls
+  but whose subagents re-derive wastes the setup.
+- **Prefer distilled memory.** Start with `--consolidation only` when you want conclusions;
+  use `ask "<object>"` for object history. Default recall is full (needle-in-haystack).
+- **PII.** `.positronic/` holds brain state and may contain PII — git-ignore it, never commit.
+
+A fuller worked example (including subagent coverage and a plan-docs step) is in the
+[positronic-agent-interface README](https://github.com/ShingWong/positronic-agent-interface).
 
 ---
 
