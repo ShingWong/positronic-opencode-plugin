@@ -81,6 +81,20 @@ pointing at one canonical entity). The engine preserves the family; the agent
 - The **latest consolidation** is the distilled version of the object; older
   τ sightings are earlier truths. Which one answers the current query is the
   agent's call — that is the polytemporal judgment the engine cannot make.
+- `recall "<cue>" --consolidation only|first` changes the recall view when you
+  want **distilled memory, not chatter**: `only` returns just consolidation
+  episodes (strict — may return fewer than k); `first` ranks consolidations
+  ahead of live messages then fills. Default is full recall (needle-in-haystack
+  is untouched). The consolidation channel is kind-scoped, so live chatter
+  can't drown a matching consolidation.
+- **Tool selection:** `--consolidation only` gives session-boundary summaries;
+  `ask` gives object history. They answer different questions — a filter for
+  "what did we conclude", a dossier for "what happened to X". Use both.
+- **Two retrieval gotchas (both fixed):** dossier/digest text falls back to
+  `json_extract(features_json,'$.body_text')` when `subject_norm` is NULL
+  (early episodes); and object resolution matches hyphen/underscore-normalized
+  names, so a spaced cue (`opencode plugin`) resolves a hyphenated entity
+  (`positronic-opencode-plugin`).
 
 ## Commands (flat, `--json` + tool_call)
 
