@@ -28,14 +28,23 @@ engine.init_database()
 
 ## Plugin equivalent (TypeScript via opencode hooks)
 
-The opencode plugin (`src/index.ts`) wires the same lifecycle:
+**Delegation:** every verb is delegated to the PAI package `positronic_ai`
+(`positronic-agent-interface`, Task 8). `src/index.ts` is a thin opencode glue
+layer only — each tool/slash/hook handler calls
+`spawnSync("python3", ["-m", "positronic_ai", verb, ...], {cwd})` and returns
+the parsed stdout JSON. `src/cli.ts` forwards `positronic <verb>` the same way
+(no `loadConfig`, no direct memeng/embed access, no zod config parsing in the
+plugin). The old TS core (`src/commands/*`, `src/brains.ts`, `src/embed.ts`,
+`src/doctor.ts`, `src/wizard.ts`, `src/config.ts`) was deleted.
 
-- `session.created` → `wake()` if `.positronic/brains/*/memory.db` exists else `positronic init` wizard
+The opencode plugin wires the same lifecycle:
+
+- `session.created` → PAI `info --json` probe (delegated config probe; no `loadConfig`)
 - `chat.message` → `ingestLive` every assistant turn (`tau` advances on arousal/novelty) — non-TTY `opencode run:1` does NOT deliver `chat.message:83:1`
-- `event` → `session.compacted` → `compactBrain` (fire-and-forget): `prune` the live brain + write a consolidation boundary marker (`~/.cache/positronic/prune.log`)
+- `event` → `session.compacted` → `compactBrain` (fire-and-forget): PAI `prune` the live brain + PAI `consolidate "session compacted <id>"` boundary marker (`~/.cache/positronic/prune.log`)
 - tools: `positronic.recall`, `positronic.ask`, `positronic.prune`, `positronic.consolidate` + flat `positronic.*` (see `docs/commands.md`)
-- slashes: 11 flat `{ title: "positronic:*", slash: { name: "positronic:*" } }` palette entries (`src/index.ts:24:1` positronicCommands, `src/commands/*: run`)
-- CLI: `positronic <verb> --json | --sql | --anchors | --objects | --sightings` (`dist/cli.ts`)
+- slashes: 12 flat `{ title: "positronic:*", slash: { name: "positronic:*" } }` palette entries (`src/index.ts` positronicCommands) — every handler spawns PAI
+- CLI: `positronic <verb> --json | --sql | --anchors | --objects | --sightings` (`dist/cli.ts`) — thin delegate to `python3 -m positronic_ai <verb>`
 
 ### Improving recall — use the `query` verb
 
@@ -72,7 +81,7 @@ positronic query --sql "SELECT COUNT(*) c FROM episode" --brain kairos --json
 
 Deferred next feature: `export`, `import`, grouped `test+verify` (`engram-verify --deep` suite) — post-v1 when `update` polling proves sufficient.
 
-CLI parity: `dist/cli.js` dispatches `positronic <verb>` → same `commands/*: run`; `docs/commands.md` is the reference.
+CLI parity: `dist/cli.js` delegates `positronic <verb>` → `python3 -m positronic_ai <verb>`; `docs/commands.md` is the reference.
 
 ## Pin & install
 
@@ -80,9 +89,14 @@ CLI parity: `dist/cli.js` dispatches `positronic <verb>` → same `commands/*: r
 export ENGRAM_TAG=v0.2.0
 git clone --depth 1 --branch $ENGRAM_TAG https://github.com/ShingWong/positronic-engram
 pip install -e positronic-engram/engine
+pip install -e /usr/local/devel/positronic/positronic-agent-interface   # PAI (positronic_ai)
 opencode plugin add github:ShingWong/positronic-opencode-plugin#beta
 positronic init --embed lexical
 ```
+
+The plugin requires the PAI package installed (`python3 -m positronic_ai`)
+to serve any verb. State lives at `.positronic/config.json` +
+`.positronic/brains/{name}/memory.db` (unchanged).
 
 Store: `.positronic/brains/*/memory.db` (gitignored, never commit — see `.gitignore:1` PII firewall)
 

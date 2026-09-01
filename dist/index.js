@@ -19,25 +19,31 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { loadConfig } from "./config.js";
-import { getEmbedder } from "./embed.js";
-import { run as infoRun } from "./commands/info.js";
-import { run as statsRun } from "./commands/stats.js";
-import { run as cfgRun } from "./commands/config.js";
-import { run as btRun } from "./commands/brainTest.js";
-import { run as lsRun } from "./commands/llmStat.js";
-import { run as lsuRun } from "./commands/llmSetup.js";
-import { run as updRun } from "./commands/update.js";
-import { run as pruneRun } from "./commands/prune.js";
-import { run as consRun } from "./commands/consolidate.js";
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-function bridgePath(name) {
-    return path.join(__dirname, `${name}.py`);
+// Every verb is delegated to the positronic_ai Python package (PAI, Task 8).
+// No python import in TS — always spawnSync `python3 -m positronic_ai <verb>`.
+function pai(argv, opts) {
+    try {
+        const r = spawnSync("python3", ["-m", "positronic_ai", ...argv], {
+            encoding: "utf-8",
+            cwd: opts?.cwd,
+            timeout: opts?.timeout ?? 60000,
+        });
+        if (r.status !== 0) {
+            return { ok: false, json: null, error: (r.stderr || "").trim() || `exit ${r.status}` };
+        }
+        try {
+            return { ok: true, json: JSON.parse(r.stdout || "{}") };
+        }
+        catch (e) {
+            return { ok: false, json: null, error: `bad json: ${(r.stdout || "").slice(0, 200)}` };
+        }
+    }
+    catch (e) {
+        return { ok: false, json: null, error: e?.message };
+    }
 }
-const positronicCommands = [
+export const positronicCommands = [
     { title: "positronic:init", value: "positronic:init", description: "init .positronic/brains (warn if exists, --force)", slash: { name: "positronic:init" } },
     { title: "positronic:info", value: "positronic:info", description: "positronic info --json", slash: { name: "positronic:info" } },
     { title: "positronic:stats", value: "positronic:stats", description: "federated brain stats", slash: { name: "positronic:stats" } },
@@ -66,41 +72,25 @@ async function ingestLive(partsToIngest, dirHint) {
         return;
     }
     const dir = dirHint || process.cwd();
-    let cfg = null;
-    try {
-        cfg = loadConfig(dir);
-    }
-    catch (e) {
-        logIngest(`ingest skip: loadConfig failed dir=${dir} err=${e?.message}`);
+    // live flag + brain list come from PAI config (never loadConfig locally)
+    const cfg = pai(["config", "--json"], { cwd: dir });
+    if (!cfg.ok) {
+        logIngest(`ingest skip: config failed dir=${dir} err=${cfg.error}`);
         return;
     }
-    if (cfg.live === false) {
+    if (cfg.json.live === false) {
         logIngest(`ingest skip: live=false dir=${dir}`);
         return;
     }
-    if (!cfg.brains || Object.keys(cfg.brains).length === 0) {
+    const brains = cfg.json.brains || {};
+    if (Object.keys(brains).length === 0) {
         logIngest(`ingest skip: no brains dir=${dir}`);
         return;
     }
-    const brainName = Object.keys(cfg.brains)[0];
-    const db = path.join(dir, ".positronic", "brains", brainName, "memory.db");
-    if (!fs.existsSync(db)) {
-        logIngest(`ingest skip: no db ${db}`);
-        return;
-    }
+    const brainName = Object.keys(brains)[0];
     try {
-        logIngest(`ingest start brain=${brainName} dir=${dir} len=${text.length} db=${db}`);
-        // Resolve engram src relative to plugin location (works on both /usr/local/devel/positronic and ~/.local/share/positronic layouts)
-        const candidates = [
-            path.resolve(__dirname, "..", "..", "positronic-engram", "engine", "src"),
-            path.resolve(__dirname, "..", "positronic-engram", "engine", "src"),
-            "/usr/local/devel/positronic/positronic-engram/engine/src",
-            path.join(os.homedir(), ".local", "share", "positronic", "positronic-engram", "engine", "src"),
-        ];
-        const engramSrc = candidates.find(p => fs.existsSync(path.join(p, "memeng", "engine.py"))) || candidates[0];
-        const script = `import sys; sys.path.insert(0, ${JSON.stringify(engramSrc)}); from memeng.store import SQLiteStore; from memeng.engine import MemoryEngine; from memeng.models import Event; from datetime import datetime, timezone; s=SQLiteStore(${JSON.stringify(db)}); e=MemoryEngine(s); r=e.new_event(Event(stream='positronic:${brainName}',kind='message',persons=['p_kairos'],wall=datetime.now(timezone.utc),features={'subject_norm': ${JSON.stringify(text.slice(0, 80))}, 'body_text': ${JSON.stringify(text)}, 'arousal': 0.5})); print(r.tau)`;
-        const out = spawnSync("python3", ["-c", script], { timeout: 4000, encoding: "utf-8" });
-        logIngest(`ingest done brain=${brainName} status=${out.status} stdout=${(out.stdout || "").slice(0, 200)} stderr=${(out.stderr || "").slice(0, 300)}`);
+        const r = pai(["ingest", text, "--arousal", "0.5", "--brain", brainName], { cwd: dir, timeout: 60000 });
+        logIngest(`ingest done brain=${brainName} dir=${dir} len=${text.length} ok=${r.ok} out=${JSON.stringify(r.json ?? r.error).slice(0, 200)}`);
     }
     catch (e) {
         logIngest(`ingest exception brain=${brainName} err=${e?.message}`);
@@ -116,12 +106,12 @@ function logPrune(msg) {
 }
 async function compactBrain(dir, sessionID) {
     try {
-        const pr = await pruneRun({ dir, json: true });
-        logPrune(`compact prune dir=${dir} ${JSON.stringify(pr.json)}`);
+        const pr = pai(["prune", "--json"], { cwd: dir });
+        logPrune(`compact prune dir=${dir} ok=${pr.ok} ${JSON.stringify(pr.json ?? pr.error).slice(0, 200)}`);
         const marker = `session compacted ${sessionID}`.trim();
         if (marker) {
-            const cr = await consRun({ dir, text: marker, arousal: 0.2, json: true });
-            logPrune(`compact marker dir=${dir} ${JSON.stringify(cr.json)}`);
+            const cr = pai(["consolidate", marker, "--arousal", "0.2"], { cwd: dir });
+            logPrune(`compact marker dir=${dir} ok=${cr.ok} ${JSON.stringify(cr.json ?? cr.error).slice(0, 200)}`);
         }
     }
     catch (e) {
@@ -171,10 +161,8 @@ async function pluginFactory(_input) {
             logIngest(`event type=${t} dir=${process.cwd()}`);
             if (t === "session.created") {
                 const dir = event?.properties?.directory || event?.directory || process.cwd();
-                try {
-                    loadConfig(dir);
-                }
-                catch { }
+                const probe = pai(["info", "--json"], { cwd: dir });
+                logIngest(`session.created info probe dir=${dir} ok=${probe.ok}`);
                 return;
             }
             if (t === "session.compacted") {
@@ -235,15 +223,26 @@ async function pluginFactory(_input) {
                     brains: z.array(z.object({ name: z.string(), profile: z.string(), embed: z.string() })).optional().describe("explicit brains array (advanced)"),
                 },
                 execute: async (args, ctx) => {
-                    const { run } = await import("./commands/init.js");
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    // Map flat --brain/--profile/--embed flags to brains array (CLI parity)
                     let brains = args?.brains;
                     if ((!brains || (Array.isArray(brains) && brains.length === 0)) && (args?.brain || args?.profile || args?.embed)) {
                         brains = [{ name: args.brain || "kairos", profile: args.profile || "balanced", embed: args.embed || "lexical" }];
                     }
-                    const r = await run({ dir, force: args?.force, json: true, live: args?.live, brains });
-                    return JSON.stringify(r.json);
+                    const argv = ["init"];
+                    if (Array.isArray(brains) && brains.length > 0) {
+                        for (const b of brains) {
+                            argv.push("--brain", b.name, "--profile", b.profile || "balanced", "--embed", b.embed || "lexical");
+                        }
+                    }
+                    if (args?.force)
+                        argv.push("--force");
+                    if (args?.live === true)
+                        argv.push("--live");
+                    if (args?.live === false)
+                        argv.push("--no-live");
+                    argv.push("--json");
+                    const r = pai(argv, { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.recall": {
@@ -253,12 +252,10 @@ async function pluginFactory(_input) {
                     text: z.string().describe("query text"),
                     k: z.number().optional().describe("top-k"),
                 },
-                execute: async ({ dir, text, k }) => {
-                    const cfg = loadConfig(dir);
-                    void (await getEmbedder(cfg).catch(() => null));
-                    void bridgePath;
-                    void spawnSync;
-                    return [];
+                execute: async (args, ctx) => {
+                    const dir = args?.dir || ctx?.directory || process.cwd();
+                    const r = pai(["recall", args?.text ?? "", "--k", String(args?.k ?? 8), "--json"], { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.ask": {
@@ -267,10 +264,10 @@ async function pluginFactory(_input) {
                     dir: z.string().optional().describe("project directory"),
                     object: z.string().describe("object name"),
                 },
-                execute: async ({ dir, object }) => {
-                    void dir;
-                    void object;
-                    return { found: false, episodes: [] };
+                execute: async (args, ctx) => {
+                    const dir = args?.dir || ctx?.directory || process.cwd();
+                    const r = pai(["ask", args?.object ?? "", "--json"], { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.info": {
@@ -280,8 +277,8 @@ async function pluginFactory(_input) {
                 },
                 execute: async (args, ctx) => {
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    const r = await infoRun({ dir, json: true });
-                    return JSON.stringify(r.json);
+                    const r = pai(["info", "--json"], { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.stats": {
@@ -292,8 +289,12 @@ async function pluginFactory(_input) {
                 },
                 execute: async (args, ctx) => {
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    const r = await statsRun({ dir, brain: args?.brain, json: true });
-                    return JSON.stringify(r.json);
+                    const argv = ["stats"];
+                    if (args?.brain)
+                        argv.push("--brain", args.brain);
+                    argv.push("--json");
+                    const r = pai(argv, { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.config": {
@@ -307,8 +308,16 @@ async function pluginFactory(_input) {
                 },
                 execute: async (args, ctx) => {
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    const r = await cfgRun({ dir, brain: args?.brain, key: args?.key, value: args?.value, confirm: args?.confirm, json: true });
-                    return JSON.stringify(r.json);
+                    const argv = ["config"];
+                    if (args?.key)
+                        argv.push(args.key);
+                    if (args?.value)
+                        argv.push(args.value);
+                    if (args?.brain)
+                        argv.push("--brain", args.brain);
+                    argv.push("--json");
+                    const r = pai(argv, { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.brain-test": {
@@ -320,16 +329,18 @@ async function pluginFactory(_input) {
                 },
                 execute: async (args, ctx) => {
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    const r = await btRun({ dir, brain: args?.brain || "kairos", k: args?.k || 3, json: true });
-                    return JSON.stringify(r.json);
+                    const argv = ["brain-test", "--brain", args?.brain || "kairos", "--k", String(args?.k ?? 3)];
+                    argv.push("--json");
+                    const r = pai(argv, { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.llm-stat": {
                 description: "bge/llama tier health",
                 args: {},
-                execute: async (_args) => {
-                    const r = await lsRun({ json: true });
-                    return JSON.stringify(r.json);
+                execute: async () => {
+                    const r = pai(["llm-stat", "--json"]);
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.llm-setup": {
@@ -338,8 +349,8 @@ async function pluginFactory(_input) {
                     tier: z.string().optional().describe("tier 1|2|3"),
                 },
                 execute: async (args) => {
-                    const r = await lsuRun({ tier: args?.tier || "3", json: true });
-                    return JSON.stringify(r.json);
+                    const r = pai(["llm-setup", "--tier", args?.tier || "3", "--json"]);
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.update": {
@@ -353,8 +364,18 @@ async function pluginFactory(_input) {
                 },
                 execute: async (args, ctx) => {
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    const r = await updRun({ check: args?.check, pin: args?.pin, status: args?.status, tail: args?.tail, json: true, dir });
-                    return JSON.stringify(r.json);
+                    const argv = ["update"];
+                    if (args?.check)
+                        argv.push("--check");
+                    if (args?.pin)
+                        argv.push("--pin", String(args.pin));
+                    if (args?.status)
+                        argv.push("--status", String(args.status));
+                    if (args?.tail !== undefined)
+                        argv.push("--tail", String(args.tail));
+                    argv.push("--json");
+                    const r = pai(argv, { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.delete": {
@@ -365,10 +386,15 @@ async function pluginFactory(_input) {
                     dir: z.string().optional().describe("project directory"),
                 },
                 execute: async (args, ctx) => {
-                    const { run } = await import("./commands/delete.js");
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    const r = await run({ dir, brain: args?.brain, force: args?.force, json: true });
-                    return JSON.stringify(r.json);
+                    const argv = ["delete"];
+                    if (args?.brain)
+                        argv.push("--brain", args.brain);
+                    if (args?.force)
+                        argv.push("--force");
+                    argv.push("--json");
+                    const r = pai(argv, { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.query": {
@@ -386,10 +412,28 @@ async function pluginFactory(_input) {
                     dir: z.string().optional().describe("project directory"),
                 },
                 execute: async (args, ctx) => {
-                    const { runQuery } = await import("./commands/query.js");
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    const r = await runQuery({ dir, brain: args?.brain, qtext: args?.text || args?.query, sql: args?.sql, cue: args?.cue, objects: args?.objects, anchors: args?.anchors, sightings: args?.sightings, k: args?.k || 8, json: true });
-                    return JSON.stringify(r.json);
+                    const argv = ["query"];
+                    const qtext = args?.text || args?.query;
+                    if (qtext)
+                        argv.push(qtext);
+                    if (args?.sql)
+                        argv.push("--sql", args.sql);
+                    if (args?.cue)
+                        argv.push("--cue", args.cue);
+                    if (args?.objects)
+                        argv.push("--objects");
+                    if (args?.anchors)
+                        argv.push("--anchors");
+                    if (args?.sightings)
+                        argv.push("--sightings");
+                    if (args?.k)
+                        argv.push("--k", String(args.k));
+                    if (args?.brain)
+                        argv.push("--brain", args.brain);
+                    argv.push("--json");
+                    const r = pai(argv, { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.prune": {
@@ -399,8 +443,8 @@ async function pluginFactory(_input) {
                 },
                 execute: async (args, ctx) => {
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    const r = await pruneRun({ dir, json: true });
-                    return JSON.stringify(r.json);
+                    const r = pai(["prune", "--json"], { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
             "positronic.consolidate": {
@@ -413,22 +457,25 @@ async function pluginFactory(_input) {
                 },
                 execute: async (args, ctx) => {
                     const dir = args?.dir || ctx?.directory || process.cwd();
-                    const r = await consRun({ dir, brain: args?.brain, text: args?.text || "", arousal: args?.arousal, json: true });
-                    return JSON.stringify(r.json);
+                    const argv = ["consolidate", args?.text || ""];
+                    if (args?.arousal !== undefined)
+                        argv.push("--arousal", String(args.arousal));
+                    if (args?.brain)
+                        argv.push("--brain", args.brain);
+                    argv.push("--json");
+                    const r = pai(argv, { cwd: dir });
+                    return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
         },
         __positronic: {
             async recall(dir, text, k = 8) {
-                const cfg = loadConfig(dir);
-                const embedder = await getEmbedder(cfg).catch(() => null);
-                void embedder;
-                return [];
+                const r = pai(["recall", text ?? "", "--k", String(k), "--json"], { cwd: dir });
+                return r.ok ? r.json : [];
             },
             async ask(dir, objectName) {
-                void dir;
-                void objectName;
-                return { found: false, episodes: [] };
+                const r = pai(["ask", objectName ?? "", "--json"], { cwd: dir });
+                return r.ok ? r.json : { found: false, episodes: [] };
             },
         },
     };
@@ -436,10 +483,6 @@ async function pluginFactory(_input) {
 const plugin = pluginFactory;
 // Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule
 const pluginModule = { id: "positronic-opencode-plugin", server: pluginFactory };
-void plugin;
-void pluginModule;
-void bridgePath;
-void spawnSync;
 export const tui = async (api, _opts, _meta) => {
     const cmds = [...positronicCommands];
     try {
@@ -457,4 +500,5 @@ export const tui = async (api, _opts, _meta) => {
     }
     catch { }
 };
+export { plugin };
 export default pluginModule;

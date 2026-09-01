@@ -17,18 +17,35 @@
 // =====================================================================
 
 import { describe, test, expect } from "vitest";
-import plugin from "../src/index.js";
+import plugin, { positronicCommands, tui } from "../src/index.js";
 
 describe("plugin hooks", () => {
-  test("exports event hook", async () => {
-    const hooks = await (plugin as any)({ client: {}, directory: "/tmp", worktree: "/tmp" });
+  test("exports PluginModule with server factory", async () => {
+    expect(plugin.id).toBe("positronic-opencode-plugin");
+    expect(typeof plugin.server).toBe("function");
+  });
+
+  test("server factory exports event hook", async () => {
+    const hooks = await (plugin as any).server({ client: {}, directory: "/tmp", worktree: "/tmp" });
     expect(hooks["event"]).toBeDefined();
   });
 
-  test("exports tools", async () => {
-    const h = await (plugin as any)({ client: {}, directory: "/tmp", worktree: "/tmp" });
+  test("server factory exports tools", async () => {
+    const h = await (plugin as any).server({ client: {}, directory: "/tmp", worktree: "/tmp" });
     expect(h.tool["positronic.recall"]).toBeDefined();
     expect(h.tool["positronic.ask"]).toBeDefined();
     expect(h.tool["positronic.stats"]).toBeDefined();
+  });
+
+  test("tui is a function", () => {
+    expect(typeof tui).toBe("function");
+  });
+
+  test("positronicCommands lists 12 verbs (PAI verbs minus legacy recall/ask)", () => {
+    const verbs = positronicCommands.map((c) => c.value.replace("positronic:", ""));
+    expect(verbs).toEqual([
+      "init", "info", "stats", "config", "brain-test", "llm-stat",
+      "llm-setup", "update", "delete", "query", "prune", "consolidate",
+    ]);
   });
 });
