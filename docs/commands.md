@@ -105,7 +105,17 @@ positronic update --tail 50 --json         # {"logTail":[...]}
 
 - Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (11 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
 - CLI `dist/cli.js` dispatches `positronic <verb>` → same `run` (parity `--tail/--check/--status`).
-- `session.compacted` → `compactBrain`: `prune` live brain + `"session compacted <id>"` consolidation marker (`~/.cache/positronic/prune.log`).
+- `session.compacted` → `compactBrain`: `prune` live brain + a content-carrying consolidation marker (`~/.cache/positronic/prune.log`).
+- **Consolidation marker content lives in `features_json.body_text`**, not
+  `subject_norm` (truncated at 80 chars). `composeMarker` joins up to 4 recent
+  anchors + the recent object graph. Read the full text with
+  `query --sql "SELECT round(tau,1) tau, kind, json_extract(features_json,'$.body_text') t FROM episode WHERE kind='consolidation' ORDER BY tau DESC LIMIT 1" --json`
+- **Compaction log**: each pass (`scanned/day_merged/expired/...`) and the marker
+  write (`tau`, `len`, `episode_id`) are appended to `~/.cache/positronic/prune.log`.
+  A `len` > 80 means anchors were composed into the marker; a bare
+  `session compacted <id>` fallback means the span had no anchors.
+- Markers link to objects via `object_sighting` — verify a marker is recallable
+  as a sighting with `query --sql "SELECT o.canonical_name, o.salience FROM object_sighting s JOIN object o ON o.id=s.object_id WHERE s.episode_id='<id>'" --json`.
 - PII: `config` refuses `*.db` / `memory.db` / `brain_henry`; `remote_key` masked unless `--show-secrets`.
 - Deferred `update` uses `~/.cache/positronic/update-<jobId>.log` + `.lock`, polled not SSE.
 

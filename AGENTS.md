@@ -41,7 +41,7 @@ The opencode plugin wires the same lifecycle:
 
 - `session.created` → PAI `info --json` probe (delegated config probe; no `loadConfig`)
 - `chat.message` → `ingestLive` every assistant turn (`tau` advances on arousal/novelty) — non-TTY `opencode run:1` does NOT deliver `chat.message:83:1`
-- `event` → `session.compacted` → `compactBrain` (fire-and-forget): PAI `prune` the live brain + PAI `consolidate "session compacted <id>"` boundary marker (`~/.cache/positronic/prune.log`)
+- `event` → `session.compacted` → `compactBrain` (fire-and-forget): PAI `prune` the live brain + PAI `consolidate` a content-carrying boundary marker (`~/.cache/positronic/prune.log`; **marker text lives in `features_json.body_text`, not `subject_norm` — that truncates at 80 chars**)
 - tools: `positronic.recall`, `positronic.ask`, `positronic.prune`, `positronic.consolidate` + flat `positronic.*` (see `docs/commands.md`)
 - slashes: 12 flat `{ title: "positronic:*", slash: { name: "positronic:*" } }` palette entries (`src/index.ts` positronicCommands) — every handler spawns PAI
 - CLI: `positronic <verb> --json | --sql | --anchors | --objects | --sightings` (`dist/cli.ts`) — thin delegate to `python3 -m positronic_ai <verb>`
