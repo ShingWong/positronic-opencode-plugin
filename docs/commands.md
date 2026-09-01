@@ -100,6 +100,12 @@ positronic update --tail 50 --json         # {"logTail":[...]}
   `tau`/`wall`/`kind`. Use it to dig deeper when the digest isn't enough.
 - The latest consolidation is the distilled version; older τ = earlier truths.
   Choosing which version answers the query is the agent's job, not the engine's.
+- `recall "<cue>" --consolidation only|first` changes the recall view (default
+  is full recall, so needle-in-haystack is untouched): `only` returns just
+  consolidation episodes (distilled memory — strict, may return fewer than k);
+  `first` ranks consolidations ahead of live messages then fills with live.
+  The consolidation channel is kind-scoped, so live chatter can't push a
+  matching consolidation out of the pool.
 
 ## Notes
 
