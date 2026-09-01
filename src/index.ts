@@ -266,6 +266,7 @@ async function pluginFactory(_input: any) {
           key: z.string().optional().describe("config key"),
           value: z.string().optional().describe("config value"),
           confirm: z.boolean().optional().describe("confirm overwrite"),
+          showSecrets: z.boolean().optional().describe("reveal remote_key in set response"),
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
@@ -274,6 +275,8 @@ async function pluginFactory(_input: any) {
           if (args?.key) argv.push(args.key);
           if (args?.value) argv.push(args.value);
           if (args?.brain) argv.push("--brain", args.brain);
+          if (args?.confirm) argv.push("--confirm");
+          if (args?.showSecrets) argv.push("--show-secrets");
           argv.push("--json");
           const r = pai(argv, { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
