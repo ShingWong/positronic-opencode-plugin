@@ -106,6 +106,12 @@ positronic update --tail 50 --json         # {"logTail":[...]}
   `first` ranks consolidations ahead of live messages then fills with live.
   The consolidation channel is kind-scoped, so live chatter can't push a
   matching consolidation out of the pool.
+- `recall "<cue>" --context N` expands each hit's snippet to the ±N τ-adjacent
+  episodes in the same stream. Per-message chunking splits a fact from its
+  context (a premise message can outrank the message holding the answer, so
+  the gold never reaches the top-8 snippets); the window reunites them without
+  changing ranking. Verified on the Q2 LongMemEval failure brain: default
+  snippet lacked the gold, `--context 3` surfaced it.
 
 ## Notes
 
