@@ -67,7 +67,7 @@ function logIngest(msg: string) {
   } catch {}
 }
 
-async function ingestLive(partsToIngest: string[], dirHint?: string) {
+async function ingestLive(partsToIngest: string[], dirHint?: string, role: string = "assistant") {
   const text = partsToIngest.join("\n").slice(0, 4000).trim();
   if (!text) { logIngest("ingest skip: empty text"); return; }
   const dir = dirHint || process.cwd();
@@ -75,13 +75,17 @@ async function ingestLive(partsToIngest: string[], dirHint?: string) {
   const cfg = pai(["config", "--json"], { cwd: dir });
   if (!cfg.ok) { logIngest(`ingest skip: config failed dir=${dir} err=${cfg.error}`); return; }
   if (cfg.json.live === false) { logIngest(`ingest skip: live=false dir=${dir}`); return; }
+  if (role === "user" && cfg.json.capture_user !== true) {
+    logIngest(`ingest skip: user message, capture_user=false dir=${dir}`);
+    return;
+  }
   const brains = cfg.json.brains || {};
   if (Object.keys(brains).length === 0) { logIngest(`ingest skip: no brains dir=${dir}`); return; }
   const brainName = Object.keys(brains)[0];
   try {
-    const r = pai(["ingest", text, "--arousal", "0.5", "--brain", brainName], { cwd: dir, timeout: 60000 });
-    logIngest(`ingest done brain=${brainName} dir=${dir} len=${text.length} ok=${r.ok} out=${JSON.stringify(r.json ?? r.error).slice(0, 200)}`);
-  } catch (e: any) { logIngest(`ingest exception brain=${brainName} err=${e?.message}`); }
+    const r = pai(["ingest", text, "--arousal", "0.5", "--brain", brainName, "--role", role], { cwd: dir, timeout: 60000 });
+    logIngest(`ingest done role=${role} brain=${brainName} dir=${dir} len=${text.length} ok=${r.ok} out=${JSON.stringify(r.json ?? r.error).slice(0, 200)}`);
+  } catch (e: any) { logIngest(`ingest exception role=${role} brain=${brainName} err=${e?.message}`); }
 }
 
 function logPrune(msg: string) {
@@ -120,19 +124,17 @@ async function pluginFactory(_input: any) {
           if (typeof p?.part?.text === "string") parts.push(p.part.text);
         }
         if (msg && typeof (msg as any)?.text === "string") parts.push((msg as any).text);
-        // Only ingest assistant messages
-        const role = (msg as any)?.role || (msg as any)?.info?.role;
-        if (role && String(role).toLowerCase() === "user") {
-          logIngest(`chat.message skip user role=${role}`);
-          return;
-        }
+        // Capture both sides: ingest user AND assistant messages, role-tagged.
+        // User-side capture is gated by config capture_user (privacy).
+        const role = (msg as any)?.role || (msg as any)?.info?.role || "assistant";
+        const isUser = String(role).toLowerCase() === "user";
         if (parts.length === 0) {
           logIngest(`chat.message no parts session=${_input?.sessionID}`);
           return;
         }
-        logIngest(`chat.message ingest len=${parts.join("\n").length} session=${_input?.sessionID}`);
+        logIngest(`chat.message ingest role=${role} len=${parts.join("\n").length} session=${_input?.sessionID}`);
         const sessionDir = _input?.directory || _input?.workspace?.directory || process.cwd();
-        await ingestLive(parts, sessionDir);
+        await ingestLive(parts, sessionDir, isUser ? "user" : "assistant");
       } catch (e: any) {
         logIngest(`chat.message exception ${e?.message}`);
       }
