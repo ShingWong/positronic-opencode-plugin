@@ -96,14 +96,35 @@ function logPrune(msg: string) {
   } catch {}
 }
 
+// Compose a content-carrying consolidation marker from engram's own selection
+// machinery: recent anchor episodes (salience >= anchor_salience) + the recent
+// object graph. Falls back to the bare session id when the span has no anchors.
+const ANCHOR_SQL = "SELECT json_extract(features_json,'$.body_text') t FROM episode WHERE is_anchor=1 AND kind='message' ORDER BY tau DESC LIMIT 4";
+const OBJECT_SQL = "SELECT canonical_name FROM object ORDER BY COALESCE(last_seen_tau,first_seen_tau) DESC LIMIT 8";
+
+export function composeMarker(dir: string, sessionID: string): string {
+  const anchors = pai(["query", "--sql", ANCHOR_SQL, "--json"], { cwd: dir });
+  const frags = (anchors.ok && Array.isArray(anchors.json?.results))
+    ? anchors.json.results.map((r: any) => r?.t).filter((t: any): t is string => typeof t === "string" && t.length > 0)
+    : [];
+  if (frags.length === 0) return `session compacted ${sessionID}`.trim();
+  const objs = pai(["query", "--sql", OBJECT_SQL, "--json"], { cwd: dir });
+  const names = (objs.ok && Array.isArray(objs.json?.results))
+    ? objs.json.results.map((r: any) => r?.canonical_name).filter((n: any): n is string => typeof n === "string")
+    : [];
+  let text = frags.slice(0, 4).join(" | ");
+  if (names.length) text += ` objects: ${names.slice(0, 8).join(", ")}`;
+  return text.slice(0, 1000);
+}
+
 async function compactBrain(dir: string, sessionID: string) {
   try {
     const pr = pai(["prune", "--json"], { cwd: dir });
     logPrune(`compact prune dir=${dir} ok=${pr.ok} ${JSON.stringify(pr.json ?? pr.error).slice(0, 200)}`);
-    const marker = `session compacted ${sessionID}`.trim();
+    const marker = composeMarker(dir, sessionID);
     if (marker) {
-      const cr = pai(["consolidate", marker, "--arousal", "0.2"], { cwd: dir });
-      logPrune(`compact marker dir=${dir} ok=${cr.ok} ${JSON.stringify(cr.json ?? cr.error).slice(0, 200)}`);
+      const cr = pai(["consolidate", marker, "--arousal", "0.3"], { cwd: dir });
+      logPrune(`compact marker dir=${dir} ok=${cr.ok} len=${marker.length} ${JSON.stringify(cr.json ?? cr.error).slice(0, 200)}`);
     }
   } catch (e: any) {
     logPrune(`compact exception dir=${dir} err=${e?.message}`);
