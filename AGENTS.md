@@ -63,6 +63,32 @@ positronic query --sql "SELECT COUNT(*) c FROM episode" --brain kairos --json
 - Anchor events (`salience >= anchor_salience:1`, `is_anchor=1:1`) are the durable memory hooks — follow `anchor_edge.is_anchor:1`
 - Objects (`get_or_create_object dedupe 610:1`) auto-extracted from anchor text — reuse node IDs
 
+### Trigger table — when query/recall is MANDATORY before any other action
+
+The plugin injects a "GROUND BEFORE DERIVING" reminder into the system prompt
+on every chat turn (`experimental.chat.system.transform` — system prompt, so
+it is never ingested into the brain). The paragraph above is advisory; this
+table is the enforced decision procedure. **BEFORE any of these, run `recall`
+(or `ask`) first; re-derive only if recall returns nothing relevant.**
+
+| Trigger | Mandatory recall call |
+|---|---|
+| Answering a question about project state, history, or a prior decision | `recall "<topic>" --consolidation only` then full `recall` if thin |
+| Starting a new task, follow-up edit, or resume | `recall "<topic>" --consolidation only` |
+| Before editing a file in any positronic repo | `recall "<topic>" --json` (topic = the file's concern) |
+| Before a git commit / PR / push | `recall "commit <subject>" --json` |
+| Investigating "did we do X?" / "where is Y?" | `ask "<object>"` or `recall "<topic>"` |
+| Creating a plan doc / SDD task brief | carry a recall step inside it |
+
+**Fallback (the exit hatch, so the rule never blocks):** if `recall` returns
+no relevant hits (all `rrf_score` ~0 / unrelated), you are free to re-derive
+from files — empty recall is a legitimate answer. The rule forbids *skipping
+the query*, never the re-derivation.
+
+**Evidence over vibes:** when you cite a decision, name the τ you recalled it
+from (e.g. "per τ=2781 consolidation"). If you cannot name a τ, you have not
+actually recalled — you are guessing or re-deriving, and should stop.
+
 ### Polytemporal objects — recall returns a digest, `ask` reveals depth
 
 An **object is a family of time-stamped sightings** (messages + consolidations

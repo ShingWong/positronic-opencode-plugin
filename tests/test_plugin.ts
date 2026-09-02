@@ -30,6 +30,21 @@ describe("plugin hooks", () => {
     expect(hooks["event"]).toBeDefined();
   });
 
+  test("server factory exports ground-before-deriving system transform (no chat-message injection)", async () => {
+    const hooks = await (plugin as any).server({ client: {}, directory: "/tmp", worktree: "/tmp" });
+    expect(hooks["experimental.chat.system.transform"]).toBeDefined();
+    // injecting into the system prompt, not into the message stream:
+    // a chat.message would be captured by ingestLive and pollute the brain.
+    const output: any = { system: ["existing"] };
+    await hooks["experimental.chat.system.transform"]({}, output);
+    expect(output.system.length).toBe(2);
+    expect(output.system[1]).toContain("GROUND BEFORE DERIVING");
+    expect(output.system[1]).toContain("--consolidation only");
+    // idempotent: second call does not duplicate the reminder
+    await hooks["experimental.chat.system.transform"]({}, output);
+    expect(output.system.length).toBe(2);
+  });
+
   test("server factory exports tools", async () => {
     const h = await (plugin as any).server({ client: {}, directory: "/tmp", worktree: "/tmp" });
     expect(h.tool["positronic.recall"]).toBeDefined();

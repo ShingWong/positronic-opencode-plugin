@@ -199,6 +199,28 @@ async function pluginFactory(_input: any) {
         await ingestLive(parts);
       }
     },
+    // Ground-before-deriving reminder injected into the system prompt on every
+    // chat turn. Deliberately NOT a chat.message: a chat message would be
+    // captured by the ingestLive hook and pollute the brain with a synthetic
+    // episode. The system prompt is never ingested, so memory stays clean.
+    "experimental.chat.system.transform": async (_input: any, output: any) => {
+      try {
+        const remind = [
+          "GROUND BEFORE DERIVING: this project's memory is positronic.",
+          "Before answering project-state questions, editing files, or re-deriving prior decisions, query the brain first:",
+          "  positronic recall \"<topic>\" --json           # full recall",
+          "  positronic recall \"<topic>\" --consolidation only --json   # distilled memory first",
+          "  positronic ask \"<object>\" --json            # entity dossier",
+          "Only re-derive from files if recall returns nothing relevant. This is mandatory (AGENTS.md).",
+        ].join("\n");
+        const system = Array.isArray(output?.system) ? output.system : [];
+        const already = system.some((s: string) => typeof s === "string" && s.includes("GROUND BEFORE DERIVING"));
+        if (!already) system.push(remind);
+        if (output) output.system = system;
+      } catch (e: any) {
+        logIngest(`system.transform exception ${e?.message}`);
+      }
+    },
     tool: {
       "positronic.init": {
         description: "init .positronic/brains (warn if exists, --force to overwrite; --live/--no-live)",
