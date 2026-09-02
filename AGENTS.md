@@ -46,9 +46,14 @@ The opencode plugin wires the same lifecycle:
 - slashes: 12 flat `{ title: "positronic:*", slash: { name: "positronic:*" } }` palette entries (`src/index.ts` positronicCommands) — every handler spawns PAI
 - CLI: `positronic <verb> --json | --sql | --anchors | --objects | --sightings` (`dist/cli.ts`) — thin delegate to `python3 -m positronic_ai <verb>`
 
-### Improving recall — use the `query` verb
+### Positronic first — read the instruction file
 
-The brain is a **polytemporal engram** — events accrue `tau` with arousal/novelty, decay under retention profiles. Before re-deriving anything, **query first**:
+**Query the brain before the filesystem** — before project questions, edits, or
+resuming work. The rule, re-derivation policy, and call syntax live in one
+place: **read `POSITRONIC-FIRST.md`** at the umbrella root
+(`/usr/local/devel/positronic/POSITRONIC-FIRST.md`).
+
+Query syntax reference (plugin-side):
 
 ```bash
 positronic query "liqui-fire engine" --brain kairos --k 8 --json
