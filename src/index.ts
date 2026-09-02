@@ -131,20 +131,35 @@ async function compactBrain(dir: string, sessionID: string) {
   }
 }
 
+// Collect assistant-message text for ingestion, deliberately EXCLUDING
+// reasoning/thinking parts: they are process, not decision. The answer part
+// already carries the conclusion; ingesting the reasoning trace would let a
+// future recall surface a discarded hypothesis as if it were a decision.
+// Exported for tests.
+export function isReasoningPart(p: any): boolean {
+  return typeof p?.type === "string" && p.type === "reasoning";
+}
+
+export function collectAssistantText(outParts: any[], msg: any): string[] {
+  const parts: string[] = [];
+  for (const p of outParts || []) {
+    if (isReasoningPart(p)) continue;
+    if (typeof p?.text === "string" && p.text.trim()) parts.push(p.text);
+    if (typeof p?.part?.text === "string" && !isReasoningPart(p.part)) parts.push(p.part.text);
+  }
+  if (msg && typeof (msg as any)?.text === "string") parts.push((msg as any).text);
+  return parts;
+}
+
 async function pluginFactory(_input: any) {
   return {
     // chat.message is the correct hook for live ingestion in opencode 1.18+ (event bus only has session.*)
     "chat.message": async (_input: any, output: any) => {
       try {
-        const parts: string[] = [];
         const msg = output?.message;
         const outParts: any[] = output?.parts || [];
-        // Collect text from output.parts (assistant message being delivered to UI)
-        for (const p of outParts) {
-          if (typeof p?.text === "string" && p.text.trim()) parts.push(p.text);
-          if (typeof p?.part?.text === "string") parts.push(p.part.text);
-        }
-        if (msg && typeof (msg as any)?.text === "string") parts.push((msg as any).text);
+        // Collect answer text, skipping reasoning parts (see collectAssistantText).
+        const parts = collectAssistantText(outParts, msg);
         // Capture both sides: ingest user AND assistant messages, role-tagged.
         // User-side capture is gated by config capture_user (privacy).
         const role = (msg as any)?.role || (msg as any)?.info?.role || "assistant";
@@ -185,10 +200,10 @@ async function pluginFactory(_input: any) {
         const parts: string[] = [];
         const collect = (m: any) => {
           if (!m) return;
-          if (typeof m?.text === "string") parts.push(m.text);
+          if (typeof m?.text === "string" && m?.type !== "reasoning") parts.push(m.text);
           if (typeof m?.content === "string") parts.push(m.content);
-          if (Array.isArray(m?.parts)) m.parts.forEach((p: any) => { if (typeof p?.text === "string") parts.push(p.text); else if (typeof p === "string") parts.push(p); });
-          if (Array.isArray(m?.message?.parts)) m.message.parts.forEach((p: any) => { if (typeof p?.text === "string") parts.push(p.text); });
+          if (Array.isArray(m?.parts)) m.parts.forEach((p: any) => { if (p?.type !== "reasoning" && typeof p?.text === "string") parts.push(p.text); else if (typeof p === "string") parts.push(p); });
+          if (Array.isArray(m?.message?.parts)) m.message.parts.forEach((p: any) => { if (p?.type !== "reasoning" && typeof p?.text === "string") parts.push(p.text); });
           if (typeof m?.properties?.part?.text === "string") parts.push(m.properties.part.text);
           if (typeof m?.properties?.delta === "string") parts.push(m.properties.delta);
         };

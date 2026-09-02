@@ -17,7 +17,7 @@
 // =====================================================================
 
 import { describe, test, expect } from "vitest";
-import plugin, { positronicCommands, tui } from "../src/index.js";
+import plugin, { positronicCommands, tui, collectAssistantText } from "../src/index.js";
 
 describe("plugin hooks", () => {
   test("exports PluginModule with server factory", async () => {
@@ -47,5 +47,33 @@ describe("plugin hooks", () => {
       "init", "info", "stats", "config", "brain-test", "llm-stat",
       "llm-setup", "update", "delete", "query", "prune", "consolidate",
     ]);
+  });
+
+  test("collectAssistantText excludes reasoning parts but keeps the answer", () => {
+    const parts = [
+      { type: "reasoning", text: "The user is asking about valuation... Let me think about the market." },
+      { type: "text", text: "Honest answer: the market value is well-understood." },
+      { type: "reasoning", text: "Should I mention Mimecast? Maybe. But keep it short." },
+      { type: "text", text: "Mimecast exited at $5.8B." },
+    ];
+    const out = collectAssistantText(parts, null);
+    const joined = out.join("\n");
+    expect(joined).toContain("Honest answer");
+    expect(joined).toContain("Mimecast exited");
+    expect(joined).not.toContain("Let me think about the market");
+    expect(joined).not.toContain("Should I mention Mimecast");
+    expect(out.length).toBe(2);
+  });
+
+  test("collectAssistantText skips nested reasoning part and keeps msg text", () => {
+    const parts = [
+      { type: "text", part: { type: "reasoning", text: "nested thinking trace" } },
+      { type: "text", part: { type: "text", text: "nested answer" } },
+    ];
+    const out = collectAssistantText(parts, { text: "top-level answer" });
+    const joined = out.join("\n");
+    expect(joined).toContain("nested answer");
+    expect(joined).toContain("top-level answer");
+    expect(joined).not.toContain("nested thinking");
   });
 });
