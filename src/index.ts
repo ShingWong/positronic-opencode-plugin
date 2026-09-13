@@ -467,8 +467,143 @@ async function pluginFactory(_input: any) {
 
 const plugin = pluginFactory;
 
-// Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule
-const pluginModule: any = { id: "positronic-opencode-plugin", server: pluginFactory };
+// ---------------------------------------------------------------------------
+// v2 (opencode 2.x) entry - opencode 1.18 path above is UNTOUCHED.
+// v2 loads `default { id, setup }`; tools register via ctx.tool.transform
+// with { name, description, inputSchema, execute }; lifecycle/message flow
+// arrives as event streams. Tool bodies + PAI bridge are shared verbatim.
+// NOTE on the default export below: the tested reference (port/index-v2.js)
+// replaced `export default pluginModule` outright. This merge keeps a
+// DUAL shape `{ id, server, setup }` instead — `server` keeps the 1.18
+// PluginModule path and tests/commands.test.ts + tests/test_plugin.ts green,
+// `setup` lights up the 2.x path. If 2.x ever rejects the extra `server`
+// key, drop it (one-line change) to match the reference exactly.
+// ---------------------------------------------------------------------------
+function toInputSchema(args: any) {
+  try {
+    if (args && typeof args === "object" && !Array.isArray(args)) {
+      // already a ZodObject (has .parse)? use it directly
+      if (typeof (args as any).parse === "function") return args;
+      return z.object(args);
+    }
+  } catch { /* fall through to empty schema */ }
+  return z.object({});
+}
+
+function wrapExecute(fn: (args: any, context: any) => Promise<any>) {
+  return async (args: any, context: any) => {
+    const raw = await fn(args, context);
+    // v2 fix: the 2.0 tool bridge requires execute() to resolve to an OBJECT
+    // and reads .content from it ("Te is not an Object" if given a string).
+    // v1 verbs return bare strings/arrays, so normalize here.
+    if (typeof raw === "string") return { content: [{ type: "text", text: raw }] };
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      if ((raw as any).content !== undefined) return raw;
+      let text: string;
+      try { text = JSON.stringify(raw); } catch { text = String(raw); }
+      return { ...raw, content: [{ type: "text", text }] };
+    }
+    let t: string;
+    try { t = JSON.stringify(raw); } catch { t = String(raw); }
+    return { content: [{ type: "text", text: t }] };
+  };
+}
+
+function v2get(obj: any, ...paths: string[][]): any {
+  for (const p of paths) {
+    let cur = obj, ok = true;
+    for (const k of p) { cur = cur == null ? undefined : cur[k]; if (cur === undefined) { ok = false; break; } }
+    if (ok) return cur;
+  }
+  return undefined;
+}
+
+async function handleV2Event(ev: any) {
+  try {
+    const t = ev && ev.type;
+    if (!t) return;
+    const props = (ev && (ev.data !== undefined ? ev.data : (ev.properties !== undefined ? ev.properties : ev))) || {};
+    if (t === "session.created") {
+      const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || process.cwd();
+      const probe = pai(["info", "--json"], { cwd: dir });
+      logIngest("v2 session.created info probe dir=" + dir + " ok=" + probe.ok);
+      return;
+    }
+    if (t === "session.compacted") {
+      const dir2 = v2get(props, ["info", "directory"], ["directory"], ["session", "directory"]) || process.cwd();
+      const sessionID = v2get(props, ["sessionID"], ["session", "id"], ["id"]) || "";
+      void compactBrain(dir2, String(sessionID));
+      return;
+    }
+    const msg = (props && (props.message || props.part)) || props;
+    const role = String((msg && (msg.role || (msg.info && msg.info.role))) || props.role || "assistant").toLowerCase();
+    if (role === "user") return;
+    const parts = collectAssistantText(props.parts || msg.parts || [], msg);
+    const delta = v2get(props, ["delta"], ["part", "delta"]);
+    if (typeof delta === "string" && delta) parts.push(delta);
+    if (parts.length === 0) return;
+    const sessionDir = v2get(props, ["directory"], ["session", "directory"]) || process.cwd();
+    // v2 fix: message.updated can re-fire for the same final text (and the
+    // removed part.updated pump used to spam deltas). Skip exact repeats so
+    // one assistant message ingests exactly once.
+    const digest = sessionDir + "\n" + parts.join("\n");
+    if (digest === (globalThis as any).__positronicV2Last) {
+      logIngest("v2 ingest dedupe skip len=" + parts.join("\n").length);
+      return;
+    }
+    (globalThis as any).__positronicV2Last = digest;
+    logIngest("v2 ingest role=" + role + " len=" + parts.join("\n").length);
+    await ingestLive(parts, sessionDir, "assistant");
+  } catch (e: any) { logIngest("v2 event exception " + (e && e.message)); }
+}
+
+function pumpV2Stream(ctx: any, type: string) {
+  (async () => {
+    try {
+      const stream = await ctx.event.subscribe(type);
+      for await (const ev of stream) { await handleV2Event(ev); }
+    } catch (e: any) { logIngest("v2 subscribe " + type + " err " + (e && e.message)); }
+  })();
+}
+
+async function setupV2(ctx: any) {
+  const v1: any = await pluginFactory({});
+  const defs = (v1 && v1.tool) || {};
+  try {
+    await ctx.tool.transform(async (editor: any) => {
+      // NOTE: `const` in for..of binds per iteration — each tool keeps its
+      // own def (the reference needed a factory because its loop used `var`).
+      for (const [name, d] of Object.entries(defs) as [string, any][]) {
+        editor.add({
+          name,
+          description: d.description || name,
+          inputSchema: toInputSchema(d.args),
+          execute: wrapExecute(d.execute),
+        });
+      }
+      logIngest("v2 tools registered");
+    });
+  } catch (e: any) { logIngest("v2 tool register err " + (e && e.message)); }
+  // v2 fix: core may invoke setup more than once per process (observed x2
+  // under `run`). Tool re-registration is idempotent, but stream pumps are
+  // not — a second set would double-ingest every message. Guard the pumps.
+  if ((globalThis as any).__positronicV2Pumps) {
+    logIngest("v2 pumps already running, skip");
+    return {};
+  }
+  (globalThis as any).__positronicV2Pumps = true;
+  pumpV2Stream(ctx, "session.created");
+  pumpV2Stream(ctx, "session.compacted");
+  // NOTE: message.part.updated intentionally NOT subscribed — it fires per
+  // streaming delta and caused duplicate ingests. message.updated carries
+  // the final text (plus the dedupe above as belt-and-braces).
+  pumpV2Stream(ctx, "message.updated");
+  return {};
+}
+
+// Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule.
+// `setup` is the opencode 2.x entry (see v2 block above).
+const pluginModule: any = { id: "positronic-opencode-plugin", server: pluginFactory, setup: setupV2 };
 
 export const tui = async (api: any, _opts: any, _meta: any) => {
   const cmds: any[] = [...positronicCommands];
