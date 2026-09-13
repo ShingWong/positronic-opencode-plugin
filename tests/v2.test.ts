@@ -171,6 +171,23 @@ describe("setupV2", () => {
     expect(f.subscribed).toHaveLength(1);
   });
 
+  test("cleanup clears the guard: reload starts a new pump", async () => {
+    (globalThis as any).__positronicV2Abort = undefined;
+    const f = fakeCtx();
+    const cleanup = await setupV2(f.ctx);
+    expect(f.subscribed).toHaveLength(1);
+    (cleanup as () => void)();
+    await setupV2(f.ctx);
+    expect(f.subscribed).toHaveLength(2);
+  });
+
+  test("concurrent setups start a single pump", async () => {
+    (globalThis as any).__positronicV2Abort = undefined;
+    const f = fakeCtx();
+    await Promise.all([setupV2(f.ctx), setupV2(f.ctx)]);
+    expect(f.subscribed).toHaveLength(1);
+  });
+
   test("registers 12 slash commands when the command editor supports add", async () => {
     (globalThis as any).__positronicV2Abort = undefined;
     const f = fakeCtx();

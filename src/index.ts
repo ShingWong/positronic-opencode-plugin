@@ -43,6 +43,10 @@ export function paiPython(): string {
 // the serve daemon's cwd — not the project. Derive it from our own location
 // (each project loads its own copy => correct by construction).
 export function projectDir(): string | undefined {
+  // Deploy assumption: this file is <project>/.opencode/plugins/positronic.js
+  // (3x dirname). Under vitest/dev (src/index.ts, dist/index.js) this resolves
+  // to the repo umbrella instead — harmless: toolDir prefers args.dir and
+  // ctx.directory first, and tests always pass explicit dirs.
   try { return path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))); }
   catch { return undefined; }
 }
@@ -553,8 +557,9 @@ export async function ingestAssistantOnce(text: unknown, dir: string, tag: strin
   if (typeof text !== "string") return;
   const norm = text.replace(/\s+/g, " ").trim();
   if (!norm) return;
-  if (__posIngestSeen.has(norm)) { logIngest(`v2 ${tag} dedupe skip len=${text.length}`); return; }
-  __posIngestSeen.add(norm);
+  const key = dir + "\n" + norm;
+  if (__posIngestSeen.has(key)) { logIngest(`v2 ${tag} dedupe skip len=${text.length}`); return; }
+  __posIngestSeen.add(key);
   if (__posIngestSeen.size > 5000) __posIngestSeen.clear();
   logIngest(`v2 ${tag} ingest len=${text.length}`);
   await ingestLive([text], dir, "assistant");
@@ -659,6 +664,8 @@ export async function setupV2(ctx: any) {
     logIngest("v2 event pump already running, skip");
     return () => {};
   }
+  // Check-and-set is synchronous (no await between), so concurrent setup()
+  // calls can't both start pumps — the second sees the first's guard.
   const controller = new AbortController();
   (globalThis as any).__positronicV2Abort = controller;
   (async () => {
@@ -667,7 +674,12 @@ export async function setupV2(ctx: any) {
       for await (const ev of stream as any) { await handleV2Event(ev); }
     } catch (e: any) { logIngest("v2 subscribe err " + (e && e.message)); }
   })();
-  return () => { try { controller.abort(); } catch {} };
+  // Clearing the global on cleanup: without this, an unload→reload cycle in
+  // the same process would hit the guard above with no pump running (zombie).
+  return () => {
+    try { controller.abort(); }
+    finally { if ((globalThis as any).__positronicV2Abort === controller) (globalThis as any).__positronicV2Abort = undefined; }
+  };
 }
 
 // Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule.
