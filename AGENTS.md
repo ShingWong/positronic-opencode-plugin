@@ -41,6 +41,8 @@ The opencode plugin wires the same lifecycle:
 
 - `session.created` → PAI `info --json` probe (delegated config probe; no `loadConfig`)
 - `chat.message` → `ingestLive` every assistant turn (`tau` advances on arousal/novelty) — non-TTY `opencode run:1` does NOT deliver `chat.message:83:1`
+- 2.x: `setup` → `ctx.tool.transform` registers the same 14 tools; `session.created` / `session.compacted` / `message.updated` arrive as event streams (pumps guarded once — `setup` may run ×2). `message.part.updated` is NOT subscribed (per-delta spam 2–6×); exact re-fires deduped (`__positronicV2Last`, one episode per message)
+- 2.x tool names: core normalizes dots → `positronic_info` (model sees underscores; accepted, not fought — source keeps dots for 1.18). Proven model route is the `execute` sandbox (`await tools.positronic_info({})` → PAI JSON); `execute` resolves `{content}` (bare string throws `Te is not an Object`)
 - `event` → `session.compacted` → `compactBrain` (fire-and-forget): PAI `prune` the live brain + PAI `consolidate` a content-carrying boundary marker (`~/.cache/positronic/prune.log`; **marker text lives in `features_json.body_text`, not `subject_norm` — that truncates at 80 chars**)
 - tools: `positronic.recall`, `positronic.ask`, `positronic.prune`, `positronic.consolidate` + flat `positronic.*` (see `docs/commands.md`)
 - slashes: 12 flat `{ title: "positronic:*", slash: { name: "positronic:*" } }` palette entries (`src/index.ts` positronicCommands) — every handler spawns PAI

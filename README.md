@@ -183,6 +183,8 @@ curl -fsSL https://raw.githubusercontent.com/ShingWong/positronic-opencode-plugi
 Needs only `git`, `node >=18`, `npm`, `python3 >=3.10`.
 Tier 1 (lexical) works with zero setup.
 
+Works on opencode 1.18+ and 2.x — one build serves both (`zod` v4, aligned with core).
+
 ---
 
 ## Quick start

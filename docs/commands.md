@@ -116,6 +116,7 @@ positronic update --tail 50 --json         # {"logTail":[...]}
 ## Notes
 
 - Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (11 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
+- 2.x: same verbs via `setup` + `ctx.tool.transform`, underscore names (`positronic_info` — core normalizes dots, accepted as-is). Verified live on 2.0.2: tools register, one `message.updated` → one episode, re-fires deduped, `recall` returns it verbatim.
 - CLI `dist/cli.js` dispatches `positronic <verb>` → same `run` (parity `--tail/--check/--status`).
 - `session.compacted` → `compactBrain`: `prune` live brain + a content-carrying consolidation marker (`~/.cache/positronic/prune.log`).
 - **Consolidation marker content lives in `features_json.body_text`**, not
