@@ -33,18 +33,34 @@ import plugin, {
   v2get,
   handleV2Event,
   setupV2,
+  ingestAssistantOnce,
+  v2ResetIngestState,
+  paiPython,
+  projectDir,
+  toolDir,
 } from "../src/index.js";
 
-function fakeCtx() {
+function fakeCtx(opts?: { commands?: boolean; commandAdd?: boolean }) {
   const added: any[] = [];
-  const subscribed: string[] = [];
+  const subscribed: any[] = [];
+  const cmdAdded: any[] = [];
   async function* empty() {}
+  const command =
+    opts?.commands === false
+      ? undefined
+      : {
+          transform: async (fn: any) => {
+            await fn(opts?.commandAdd === false ? {} : { add: (c: any) => cmdAdded.push(c) });
+          },
+        };
   return {
     added,
     subscribed,
+    cmdAdded,
     ctx: {
       tool: { transform: async (fn: any) => { await fn({ add: (t: any) => added.push(t) }); } },
-      event: { subscribe: async (type: string) => { subscribed.push(type); return empty(); } },
+      event: { subscribe: async (arg: any) => { subscribed.push(arg); return empty(); } },
+      ...(command ? { command } : {}),
     },
   };
 }
@@ -144,16 +160,30 @@ describe("setupV2", () => {
     expect(info.content[0].text).not.toBe(stats.content[0].text);
   });
 
-  test("second setup re-registers tools but starts no new pumps", async () => {
+  test("second setup re-registers tools but starts no new pump", async () => {
     // pump guard is process-global; reset so this test owns the lifecycle
-    (globalThis as any).__positronicV2Pumps = undefined;
+    (globalThis as any).__positronicV2Abort = undefined;
+    const f = fakeCtx();
+    const cleanup = await setupV2(f.ctx);
+    expect(f.subscribed).toHaveLength(1);
+    expect(typeof cleanup).toBe("function");
+    await setupV2(f.ctx);
+    expect(f.subscribed).toHaveLength(1);
+  });
+
+  test("registers 12 slash commands when the command editor supports add", async () => {
+    (globalThis as any).__positronicV2Abort = undefined;
     const f = fakeCtx();
     await setupV2(f.ctx);
-    const subsAfterFirst = f.subscribed.length;
-    expect(subsAfterFirst).toBe(3);
-    await setupV2(f.ctx);
-    expect(f.subscribed).toHaveLength(subsAfterFirst);
-    expect(f.subscribed.sort()).toEqual(["message.updated", "session.compacted", "session.created"]);
+    expect(f.cmdAdded).toHaveLength(12);
+    expect(f.cmdAdded[0].name).toBe("positronic:init");
+  });
+
+  test("survives a command editor without add, and no command API at all", async () => {
+    (globalThis as any).__positronicV2Abort = undefined;
+    await setupV2(fakeCtx({ commandAdd: false }).ctx); // transform ok, add missing
+    (globalThis as any).__positronicV2Abort = undefined;
+    await setupV2(fakeCtx({ commands: false }).ctx); // no ctx.command
   });
 });
 
@@ -164,8 +194,8 @@ describe("handleV2Event ingestion", () => {
     dir = mkdtempSync(join(tmpdir(), "pos-v2-"));
     seed(dir);
     tag = `v2test ${Math.random().toString(36).slice(2, 9)}`;
-    // reset the exact-repeat dedupe between tests
-    (globalThis as any).__positronicV2Last = undefined;
+    // reset the shared ingest-once set between tests
+    v2ResetIngestState();
   });
 
   test("one assistant message ingests exactly once, re-fire deduped", async () => {
@@ -182,5 +212,45 @@ describe("handleV2Event ingestion", () => {
     await handleV2Event(msgEvent(dir, "user", `${tag} user chatter stays out`));
     expect(recallCount(dir, tag)).toBe(0);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("session.text.ended ingests, whitespace variants dedupe", async () => {
+    const text = `${tag} harbor ledger closes at dusk`;
+    await handleV2Event({ type: "session.text.ended", data: { directory: dir, text } });
+    expect(recallCount(dir, tag)).toBe(1);
+    await handleV2Event({ type: "session.text.ended", data: { directory: dir, text: `  ${text}\n` } });
+    expect(recallCount(dir, tag)).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("message.updated + session.text.ended for the same turn encode once", async () => {
+    const text = `${tag} lighthouse keepers file tide reports`;
+    await handleV2Event(msgEvent(dir, "assistant", text));
+    await handleV2Event({ type: "session.text.ended", data: { directory: dir, text } });
+    expect(recallCount(dir, tag)).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("session.execution.succeeded is terminal noise", async () => {
+    await handleV2Event({ type: "session.execution.succeeded", data: { directory: dir } });
+    expect(recallCount(dir, tag)).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("Fix 6+7 — python and directory resolution", () => {
+  test("paiPython falls back to python3 when no venv exists here", () => {
+    expect(paiPython()).toBe("python3");
+  });
+
+  test("toolDir prefers args.dir, then ctx.directory, then a fallback", () => {
+    expect(toolDir({ dir: "/a" }, { directory: "/b" })).toBe("/a");
+    expect(toolDir({}, { directory: "/b" })).toBe("/b");
+    expect(typeof toolDir({}, {})).toBe("string");
+  });
+
+  test("projectDir resolves a directory or undefined, never throws", () => {
+    const d = projectDir();
+    expect(d === undefined || typeof d === "string").toBe(true);
   });
 });

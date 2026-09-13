@@ -20,13 +20,38 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 // Every verb is delegated to the positronic_ai Python package (PAI, Task 8).
-// No python import in TS — always spawnSync `python3 -m positronic_ai <verb>`.
+// No python import in TS — always spawnSync `paiPython() -m positronic_ai <verb>`.
+// Fix 6 — PAI python resolution: the background `serve` process may not
+// inherit the venv PATH (live `No module named positronic_ai`). Explicit
+// candidates first (env override, then known venvs), PATH last.
+const PAI_PYTHONS = ["/mnt/k/devel/ft/.venv-pai/bin/python", "/tmp/ft2/bin/python", "python3"];
+export function paiPython(): string {
+  const env = (typeof process !== "undefined" && process.env && (process.env.POSITRONIC_PYTHON || process.env.PAI_PYTHON)) || "";
+  for (const p of (env ? [env] : []).concat(PAI_PYTHONS)) {
+    if (p === "python3") return p;
+    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+  }
+  return "python3";
+}
+// Fix 7 — project root fallback: this file lives at
+// <project>/.opencode/plugins/positronic.js. v2 tool contexts and session
+// events don't reliably carry the session directory, and process.cwd() is
+// the serve daemon's cwd — not the project. Derive it from our own location
+// (each project loads its own copy => correct by construction).
+export function projectDir(): string | undefined {
+  try { return path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))); }
+  catch { return undefined; }
+}
+export function toolDir(args: any, ctx: any): string {
+  return args?.dir || ctx?.directory || projectDir() || process.cwd();
+}
 function pai(argv: string[], opts?: { cwd?: string; timeout?: number }): { ok: boolean; json: any; error?: string } {
   try {
-    const r = spawnSync("python3", ["-m", "positronic_ai", ...argv], {
+    const r = spawnSync(paiPython(), ["-m", "positronic_ai", ...argv], {
       encoding: "utf-8",
       cwd: opts?.cwd,
       timeout: opts?.timeout ?? 60000,
@@ -70,7 +95,7 @@ function logIngest(msg: string) {
 async function ingestLive(partsToIngest: string[], dirHint?: string, role: string = "assistant") {
   const text = partsToIngest.join("\n").slice(0, 4000).trim();
   if (!text) { logIngest("ingest skip: empty text"); return; }
-  const dir = dirHint || process.cwd();
+  const dir = dirHint || projectDir() || process.cwd();
   // live flag + brain list come from PAI config (never loadConfig locally)
   const cfg = pai(["config", "--json"], { cwd: dir });
   if (!cfg.ok) { logIngest(`ingest skip: config failed dir=${dir} err=${cfg.error}`); return; }
@@ -169,7 +194,7 @@ async function pluginFactory(_input: any) {
           return;
         }
         logIngest(`chat.message ingest role=${role} len=${parts.join("\n").length} session=${_input?.sessionID}`);
-        const sessionDir = _input?.directory || _input?.workspace?.directory || process.cwd();
+        const sessionDir = _input?.directory || _input?.workspace?.directory || projectDir() || process.cwd();
         await ingestLive(parts, sessionDir, isUser ? "user" : "assistant");
       } catch (e: any) {
         logIngest(`chat.message exception ${e?.message}`);
@@ -181,13 +206,13 @@ async function pluginFactory(_input: any) {
       if (!t) return;
       logIngest(`event type=${t} dir=${process.cwd()}`);
       if (t === "session.created") {
-        const dir = (event as any)?.properties?.directory || (event as any)?.directory || process.cwd();
+        const dir = (event as any)?.properties?.directory || (event as any)?.directory || projectDir() || process.cwd();
         const probe = pai(["info", "--json"], { cwd: dir });
         logIngest(`session.created info probe dir=${dir} ok=${probe.ok}`);
         return;
       }
       if (t === "session.compacted") {
-        const dir = (event as any)?.properties?.info?.directory || (event as any)?.properties?.directory || (event as any)?.directory || process.cwd();
+        const dir = (event as any)?.properties?.info?.directory || (event as any)?.properties?.directory || (event as any)?.directory || projectDir() || process.cwd();
         const sessionID = (event as any)?.properties?.sessionID || "";
         void compactBrain(dir, sessionID);
         return;
@@ -227,7 +252,7 @@ async function pluginFactory(_input: any) {
           brains: z.array(z.object({ name: z.string(), profile: z.string(), embed: z.string() })).optional().describe("explicit brains array (advanced)"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           let brains = args?.brains;
           if ((!brains || (Array.isArray(brains) && brains.length === 0)) && (args?.brain || args?.profile || args?.embed)) {
             brains = [{ name: args.brain || "kairos", profile: args.profile || "balanced", embed: args.embed || "lexical" }];
@@ -254,7 +279,7 @@ async function pluginFactory(_input: any) {
           k: z.number().optional().describe("top-k"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const r = pai(["recall", args?.text ?? "", "--k", String(args?.k ?? 8), "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -266,7 +291,7 @@ async function pluginFactory(_input: any) {
           object: z.string().describe("object name"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const r = pai(["ask", args?.object ?? "", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -277,7 +302,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const r = pai(["info", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -289,7 +314,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const argv = ["stats"];
           if (args?.brain) argv.push("--brain", args.brain);
           argv.push("--json");
@@ -308,7 +333,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const argv = ["config"];
           if (args?.key) argv.push(args.key);
           if (args?.value) argv.push(args.value);
@@ -328,7 +353,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const argv = ["brain-test", "--brain", args?.brain || "kairos", "--k", String(args?.k ?? 3)];
           argv.push("--json");
           const r = pai(argv, { cwd: dir });
@@ -363,7 +388,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const argv = ["update"];
           if (args?.check) argv.push("--check");
           if (args?.pin) argv.push("--pin", String(args.pin));
@@ -382,7 +407,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const argv = ["delete"];
           if (args?.brain) argv.push("--brain", args.brain);
           if (args?.force) argv.push("--force");
@@ -406,7 +431,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const argv = ["query"];
           const qtext = args?.text || args?.query;
           if (qtext) argv.push(qtext);
@@ -428,7 +453,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const r = pai(["prune", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -442,7 +467,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = args?.dir || ctx?.directory || process.cwd();
+          const dir = toolDir(args, ctx);
           const argv = ["consolidate", args?.text || ""];
           if (args?.arousal !== undefined) argv.push("--arousal", String(args.arousal));
           if (args?.brain) argv.push("--brain", args.brain);
@@ -518,52 +543,68 @@ export function v2get(obj: any, ...paths: string[][]): any {
   return undefined;
 }
 
+// Shared once-only assistant ingest across BOTH event vocabularies: a service
+// emits message.updated deltas AND session.text.ended for the same turn, so
+// without a common guard each final segment would encode twice. Key is the
+// normalized text; the set is bounded for long-lived services.
+const __posIngestSeen = new Set<string>();
+export function v2ResetIngestState() { __posIngestSeen.clear(); }
+export async function ingestAssistantOnce(text: unknown, dir: string, tag: string) {
+  if (typeof text !== "string") return;
+  const norm = text.replace(/\s+/g, " ").trim();
+  if (!norm) return;
+  if (__posIngestSeen.has(norm)) { logIngest(`v2 ${tag} dedupe skip len=${text.length}`); return; }
+  __posIngestSeen.add(norm);
+  if (__posIngestSeen.size > 5000) __posIngestSeen.clear();
+  logIngest(`v2 ${tag} ingest len=${text.length}`);
+  await ingestLive([text], dir, "assistant");
+}
+
 export async function handleV2Event(ev: any) {
   try {
     const t = ev && ev.type;
     if (!t) return;
     const props = (ev && (ev.data !== undefined ? ev.data : (ev.properties !== undefined ? ev.properties : ev))) || {};
+    const cwd = process.cwd();
+    // --- stable v2 vocabulary: session.* events (only vocabulary on 2.0.2+ service) ---
+    if (t === "session.text.ended") {
+      const txt = typeof props.text === "string" ? props.text : "";
+      await ingestAssistantOnce(txt, props.directory || projectDir() || cwd, t);
+      return;
+    }
+    if (t === "session.compacted") {
+      const cdir = props.directory || projectDir() || cwd;
+      const sessionID = props.sessionID || v2get(props, ["session", "id"], ["id"]) || "";
+      void compactBrain(cdir, String(sessionID));
+      return;
+    }
+    if (t === "session.execution.succeeded") return; // terminal noise, nothing to do
     if (t === "session.created") {
-      const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || process.cwd();
+      const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || projectDir() || cwd;
       const probe = pai(["info", "--json"], { cwd: dir });
       logIngest("v2 session.created info probe dir=" + dir + " ok=" + probe.ok);
       return;
     }
-    if (t === "session.compacted") {
-      const dir2 = v2get(props, ["info", "directory"], ["directory"], ["session", "directory"]) || process.cwd();
-      const sessionID = v2get(props, ["sessionID"], ["session", "id"], ["id"]) || "";
-      void compactBrain(dir2, String(sessionID));
+    // --- legacy beta vocabulary: message.* (standalone `run` emits these; a
+    // service pairs them with session.text.ended — the shared set above keeps
+    // exactly-once across both, so this path stays enabled).
+    if (typeof t === "string" && t.startsWith("message.")) {
+      const msg = (props && (props.message || props.part)) || props;
+      const role = String((msg && (msg.role || (msg.info && msg.info.role))) || props.role || "assistant").toLowerCase();
+      if (role === "user") return;
+      const parts = collectAssistantText(props.parts || msg.parts || [], msg);
+      const delta = v2get(props, ["delta"], ["part", "delta"]);
+      if (typeof delta === "string" && delta) parts.push(delta);
+      if (parts.length === 0) return;
+      await ingestAssistantOnce(
+        parts.join("\n"),
+        v2get(props, ["directory"], ["session", "directory"]) || projectDir() || cwd,
+        t,
+      );
       return;
     }
-    const msg = (props && (props.message || props.part)) || props;
-    const role = String((msg && (msg.role || (msg.info && msg.info.role))) || props.role || "assistant").toLowerCase();
-    if (role === "user") return;
-    const parts = collectAssistantText(props.parts || msg.parts || [], msg);
-    const delta = v2get(props, ["delta"], ["part", "delta"]);
-    if (typeof delta === "string" && delta) parts.push(delta);
-    if (parts.length === 0) return;
-    const sessionDir = v2get(props, ["directory"], ["session", "directory"]) || process.cwd();
-    // v2 fix: message.updated can re-fire for the same final text (and the
-    // removed part.updated pump used to spam deltas). Skip exact repeats so
-    // one assistant message ingests exactly once.
-    const digest = sessionDir + "\n" + parts.join("\n");
-    if (digest === (globalThis as any).__positronicV2Last) {
-      logIngest("v2 ingest dedupe skip len=" + parts.join("\n").length);
-      return;
-    }
-    (globalThis as any).__positronicV2Last = digest;
-    logIngest("v2 ingest role=" + role + " len=" + parts.join("\n").length);
-    await ingestLive(parts, sessionDir, "assistant");
+    return;
   } catch (e: any) { logIngest("v2 event exception " + (e && e.message)); }
-}
-
-export function pumpV2Stream(ctx: any, type: string) {
-  (async () => {
-    try {
-      const stream = await ctx.event.subscribe(type);
-      for await (const ev of stream) { await handleV2Event(ev); }
-    } catch (e: any) { logIngest("v2 subscribe " + type + " err " + (e && e.message)); }
-  })();
 }
 
 export async function setupV2(ctx: any) {
@@ -584,25 +625,56 @@ export async function setupV2(ctx: any) {
       logIngest("v2 tools registered");
     });
   } catch (e: any) { logIngest("v2 tool register err " + (e && e.message)); }
-  // v2 fix: core may invoke setup more than once per process (observed x2
-  // under `run`). Tool re-registration is idempotent, but stream pumps are
-  // not — a second set would double-ingest every message. Guard the pumps.
-  if ((globalThis as any).__positronicV2Pumps) {
-    logIngest("v2 pumps already running, skip");
-    return {};
+  // Fix 9 — slash commands via ctx.command.transform, GUARDED. Older beta
+  // builds lack editor.add on commands and a raw call aborts the whole plugin
+  // load; v2.0.2 supports .add. Each command re-prompts its verb (steer).
+  try {
+    if (ctx.command && typeof ctx.command.transform === "function") {
+      await ctx.command.transform((editor: any) => {
+        if (!editor || typeof editor.add !== "function") { logIngest("v2 command editor.add unavailable, skip"); return; }
+        for (const cmd of positronicCommands) {
+          const c = cmd as any;
+          const cname = String(c.value || c.title);
+          editor.add({
+            name: cname,
+            description: String(c.description || cname),
+            execute: (function (cc: any) {
+              return async (inv: any) => {
+                const text = "/positronic " + cc.value + (inv && inv.prompt && inv.prompt.text ? " " + inv.prompt.text : "");
+                try { await ctx.session.prompt({ sessionID: inv && inv.sessionID, text, delivery: (inv && inv.delivery) || "steer" }); }
+                catch (e: any) { logIngest("v2 command prompt err " + (e && e.message)); }
+              };
+            })(c),
+          });
+        }
+        logIngest(`v2 commands registered (${positronicCommands.length})`);
+      });
+    }
+  } catch (e: any) { logIngest("v2 command register err " + (e && e.message)); }
+  // Fix 8 — ONE subscription: subscribe() does not filter by argument, so
+  // per-type pumps fanned every event out N× (dedupe hid it for ingest, but
+  // probes/compactions ran N×). Guard re-entrant setup with an
+  // AbortController and return its cleanup.
+  if ((globalThis as any).__positronicV2Abort) {
+    logIngest("v2 event pump already running, skip");
+    return () => {};
   }
-  (globalThis as any).__positronicV2Pumps = true;
-  pumpV2Stream(ctx, "session.created");
-  pumpV2Stream(ctx, "session.compacted");
-  // NOTE: message.part.updated intentionally NOT subscribed — it fires per
-  // streaming delta and caused duplicate ingests. message.updated carries
-  // the final text (plus the dedupe above as belt-and-braces).
-  pumpV2Stream(ctx, "message.updated");
-  return {};
+  const controller = new AbortController();
+  (globalThis as any).__positronicV2Abort = controller;
+  (async () => {
+    try {
+      const stream = await ctx.event.subscribe({ signal: controller.signal });
+      for await (const ev of stream as any) { await handleV2Event(ev); }
+    } catch (e: any) { logIngest("v2 subscribe err " + (e && e.message)); }
+  })();
+  return () => { try { controller.abort(); } catch {} };
 }
 
 // Support both Plugin (function) and PluginModule ({server}) exports — opencode 1.18+ prefers PluginModule.
 // `setup` is the opencode 2.x entry (see v2 block above).
+// patch-2 keeps the DUAL shape deliberately: its reference drops `server` for
+// pure-v2, but that breaks the 1.18 path and shape tests for zero 2.x gain
+// (proven harmless on live 2.0.2).
 const pluginModule: any = { id: "positronic-opencode-plugin", server: pluginFactory, setup: setupV2 };
 
 export const tui = async (api: any, _opts: any, _meta: any) => {
