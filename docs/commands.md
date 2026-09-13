@@ -129,6 +129,11 @@ positronic update --tail 50 --json         # {"logTail":[...]}
   `session compacted <id>` fallback means the span had no anchors.
 - Markers link to objects via `object_sighting` — verify a marker is recallable
   as a sighting with `query --sql "SELECT o.canonical_name, o.salience FROM object_sighting s JOIN object o ON o.id=s.object_id WHERE s.episode_id='<id>'" --json`.
+- **Live-ingest 4000-char cap is plugin-side**: `ingestLive` (`src/index.ts`)
+  slices each turn to 4000 chars before PAI `ingest` — long turns truncate
+  here, not in PAI. Bulk/server-side paths (e.g. `brain_henry/mail_body_ingest.py`)
+  chunk through PAI instead (`positronic_ai.chunk.chunk_markdown`, 7000-char
+  budget + overlap), so body length there is handled by chunking, not slicing.
 - PII: `config` refuses `*.db` / `memory.db` / `brain_henry`; `remote_key` masked unless `--show-secrets`.
 - Deferred `update` uses `~/.cache/positronic/update-<jobId>.log` + `.lock`, polled not SSE.
 
