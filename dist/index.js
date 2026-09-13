@@ -535,7 +535,7 @@ const plugin = pluginFactory;
 // `setup` lights up the 2.x path. If 2.x ever rejects the extra `server`
 // key, drop it (one-line change) to match the reference exactly.
 // ---------------------------------------------------------------------------
-function toInputSchema(args) {
+export function toInputSchema(args) {
     try {
         if (args && typeof args === "object" && !Array.isArray(args)) {
             // already a ZodObject (has .parse)? use it directly
@@ -547,7 +547,7 @@ function toInputSchema(args) {
     catch { /* fall through to empty schema */ }
     return z.object({});
 }
-function wrapExecute(fn) {
+export function wrapExecute(fn) {
     return async (args, context) => {
         const raw = await fn(args, context);
         // v2 fix: the 2.0 tool bridge requires execute() to resolve to an OBJECT
@@ -577,7 +577,7 @@ function wrapExecute(fn) {
         return { content: [{ type: "text", text: t }] };
     };
 }
-function v2get(obj, ...paths) {
+export function v2get(obj, ...paths) {
     for (const p of paths) {
         let cur = obj, ok = true;
         for (const k of p) {
@@ -592,7 +592,7 @@ function v2get(obj, ...paths) {
     }
     return undefined;
 }
-async function handleV2Event(ev) {
+export async function handleV2Event(ev) {
     try {
         const t = ev && ev.type;
         if (!t)
@@ -637,7 +637,7 @@ async function handleV2Event(ev) {
         logIngest("v2 event exception " + (e && e.message));
     }
 }
-function pumpV2Stream(ctx, type) {
+export function pumpV2Stream(ctx, type) {
     (async () => {
         try {
             const stream = await ctx.event.subscribe(type);
@@ -650,7 +650,7 @@ function pumpV2Stream(ctx, type) {
         }
     })();
 }
-async function setupV2(ctx) {
+export async function setupV2(ctx) {
     const v1 = await pluginFactory({});
     const defs = (v1 && v1.tool) || {};
     try {

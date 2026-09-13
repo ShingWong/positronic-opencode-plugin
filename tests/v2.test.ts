@@ -1,0 +1,186 @@
+// =====================================================================
+// Project Positronic — Polytemporal Cognitive Engram Memory Substrate
+// Copyright (C) 2026 Shing Wong. All Rights Reserved.
+// =====================================================================
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program. If not, see <https://gnu.org>.
+// =====================================================================
+
+// Regression tests for the opencode 2.x entry (setupV2 + helpers).
+// Guards the two bugs the v2 port exists to fix:
+//  1. execute() resolving a bare string -> "Te is not an Object" on 2.x
+//  2. per-delta / re-fire duplicate ingestion (one episode per message)
+
+import { describe, test, expect, beforeEach } from "vitest";
+import { execSync } from "child_process";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { z } from "zod";
+import plugin, {
+  toInputSchema,
+  wrapExecute,
+  v2get,
+  handleV2Event,
+  setupV2,
+} from "../src/index.js";
+
+function fakeCtx() {
+  const added: any[] = [];
+  const subscribed: string[] = [];
+  async function* empty() {}
+  return {
+    added,
+    subscribed,
+    ctx: {
+      tool: { transform: async (fn: any) => { await fn({ add: (t: any) => added.push(t) }); } },
+      event: { subscribe: async (type: string) => { subscribed.push(type); return empty(); } },
+    },
+  };
+}
+
+function seed(dir: string) {
+  execSync(`python3 -m positronic_ai init --brain kairos --profile balanced --embed lexical`, { cwd: dir, stdio: "ignore" });
+}
+
+function recallCount(dir: string, cue: string): number {
+  const out = execSync(`python3 -m positronic_ai recall "${cue}" --json`, { cwd: dir, encoding: "utf-8" });
+  return (JSON.parse(out).results || []).length;
+}
+
+function msgEvent(dir: string, role: string, text: string) {
+  return {
+    type: "message.updated",
+    data: {
+      directory: dir,
+      message: { role },
+      parts: [{ type: "text", text }],
+    },
+  };
+}
+
+describe("toInputSchema", () => {
+  test("converts an args shape to a ZodObject", () => {
+    const s = toInputSchema({ text: z.string(), k: z.number().optional() });
+    expect(typeof s.parse).toBe("function");
+    expect(s.parse({ text: "hi" })).toEqual({ text: "hi" });
+  });
+
+  test("passes an existing ZodObject through untouched", () => {
+    const already = z.object({ a: z.string() });
+    expect(toInputSchema(already)).toBe(already);
+  });
+
+  test("falls back to an empty schema for absent/garbage args", () => {
+    for (const bad of [undefined, null, 42, "x", []]) {
+      const s = toInputSchema(bad);
+      expect(typeof s.parse).toBe("function");
+      expect(s.parse({})).toEqual({});
+    }
+  });
+});
+
+describe("wrapExecute", () => {
+  test("wraps a bare string in .content", async () => {
+    const out = await wrapExecute(async () => "hello")({}, {});
+    expect(out).toEqual({ content: [{ type: "text", text: "hello" }] });
+  });
+
+  test("wraps arrays in .content as JSON", async () => {
+    const out = await wrapExecute(async () => [1, 2])( {}, {});
+    expect(out.content[0].text).toBe("[1,2]");
+  });
+
+  test("spreads plain objects and adds .content", async () => {
+    const out = await wrapExecute(async () => ({ a: 1 }))( {}, {});
+    expect(out.a).toBe(1);
+    expect(out.content[0].text).toBe('{"a":1}');
+  });
+
+  test("passes objects that already carry .content through", async () => {
+    const raw = { content: [{ type: "text", text: "kept" }] };
+    expect(await wrapExecute(async () => raw)({}, {})).toBe(raw);
+  });
+});
+
+describe("v2get", () => {
+  test("returns the first matching path, undefined otherwise", () => {
+    const o = { session: { directory: "/x" } };
+    expect(v2get(o, ["directory"], ["session", "directory"])).toBe("/x");
+    expect(v2get(o, ["missing"], ["also", "missing"])).toBeUndefined();
+    expect(v2get(null, ["a"])).toBeUndefined();
+  });
+});
+
+describe("setupV2", () => {
+  test("default export carries both the v1 server and the v2 setup", () => {
+    expect((plugin as any).id).toBe("positronic-opencode-plugin");
+    expect(typeof (plugin as any).server).toBe("function");
+    expect(typeof (plugin as any).setup).toBe("function");
+  });
+
+  test("registers 14 tools with Zod schemas and .content executes", async () => {
+    const f = fakeCtx();
+    await setupV2(f.ctx);
+    expect(f.added).toHaveLength(14);
+    for (const t of f.added) expect(typeof t.inputSchema?.parse).toBe("function");
+    const byName = Object.fromEntries(f.added.map((t: any) => [t.name, t]));
+    const info = await byName["positronic.info"].execute({ dir: "/tmp" }, {});
+    const stats = await byName["positronic.stats"].execute({ dir: "/tmp" }, {});
+    expect(Array.isArray(info?.content)).toBe(true);
+    expect(Array.isArray(stats?.content)).toBe(true);
+    expect(JSON.parse(info.content[0].text)).toHaveProperty("version");
+    // per-tool closure binding: no "last verb wins"
+    expect(info.content[0].text).not.toBe(stats.content[0].text);
+  });
+
+  test("second setup re-registers tools but starts no new pumps", async () => {
+    // pump guard is process-global; reset so this test owns the lifecycle
+    (globalThis as any).__positronicV2Pumps = undefined;
+    const f = fakeCtx();
+    await setupV2(f.ctx);
+    const subsAfterFirst = f.subscribed.length;
+    expect(subsAfterFirst).toBe(3);
+    await setupV2(f.ctx);
+    expect(f.subscribed).toHaveLength(subsAfterFirst);
+    expect(f.subscribed.sort()).toEqual(["message.updated", "session.compacted", "session.created"]);
+  });
+});
+
+describe("handleV2Event ingestion", () => {
+  let dir: string;
+  let tag: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "pos-v2-"));
+    seed(dir);
+    tag = `v2test ${Math.random().toString(36).slice(2, 9)}`;
+    // reset the exact-repeat dedupe between tests
+    (globalThis as any).__positronicV2Last = undefined;
+  });
+
+  test("one assistant message ingests exactly once, re-fire deduped", async () => {
+    const text = `${tag} octopus courier routes parcels by tide`;
+    await handleV2Event(msgEvent(dir, "assistant", text));
+    expect(recallCount(dir, tag)).toBe(1);
+    await handleV2Event(msgEvent(dir, "assistant", text));
+    await handleV2Event(msgEvent(dir, "assistant", text));
+    expect(recallCount(dir, tag)).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("user messages are skipped", async () => {
+    await handleV2Event(msgEvent(dir, "user", `${tag} user chatter stays out`));
+    expect(recallCount(dir, tag)).toBe(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

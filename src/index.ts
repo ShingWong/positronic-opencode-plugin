@@ -479,7 +479,7 @@ const plugin = pluginFactory;
 // `setup` lights up the 2.x path. If 2.x ever rejects the extra `server`
 // key, drop it (one-line change) to match the reference exactly.
 // ---------------------------------------------------------------------------
-function toInputSchema(args: any) {
+export function toInputSchema(args: any) {
   try {
     if (args && typeof args === "object" && !Array.isArray(args)) {
       // already a ZodObject (has .parse)? use it directly
@@ -490,7 +490,7 @@ function toInputSchema(args: any) {
   return z.object({});
 }
 
-function wrapExecute(fn: (args: any, context: any) => Promise<any>) {
+export function wrapExecute(fn: (args: any, context: any) => Promise<any>) {
   return async (args: any, context: any) => {
     const raw = await fn(args, context);
     // v2 fix: the 2.0 tool bridge requires execute() to resolve to an OBJECT
@@ -509,7 +509,7 @@ function wrapExecute(fn: (args: any, context: any) => Promise<any>) {
   };
 }
 
-function v2get(obj: any, ...paths: string[][]): any {
+export function v2get(obj: any, ...paths: string[][]): any {
   for (const p of paths) {
     let cur = obj, ok = true;
     for (const k of p) { cur = cur == null ? undefined : cur[k]; if (cur === undefined) { ok = false; break; } }
@@ -518,7 +518,7 @@ function v2get(obj: any, ...paths: string[][]): any {
   return undefined;
 }
 
-async function handleV2Event(ev: any) {
+export async function handleV2Event(ev: any) {
   try {
     const t = ev && ev.type;
     if (!t) return;
@@ -557,7 +557,7 @@ async function handleV2Event(ev: any) {
   } catch (e: any) { logIngest("v2 event exception " + (e && e.message)); }
 }
 
-function pumpV2Stream(ctx: any, type: string) {
+export function pumpV2Stream(ctx: any, type: string) {
   (async () => {
     try {
       const stream = await ctx.event.subscribe(type);
@@ -566,7 +566,7 @@ function pumpV2Stream(ctx: any, type: string) {
   })();
 }
 
-async function setupV2(ctx: any) {
+export async function setupV2(ctx: any) {
   const v1: any = await pluginFactory({});
   const defs = (v1 && v1.tool) || {};
   try {
