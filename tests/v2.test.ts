@@ -262,6 +262,43 @@ describe("handleV2Event ingestion", () => {
     expect(recallCount(dir, tag)).toBe(0);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  test("session.compaction.ended runs prune + writes a consolidation marker", async () => {
+    const text = `${tag} compaction boundary keeps decisions`;
+    await handleV2Event(msgEvent(dir, "assistant", text));
+    await handleV2Event({ type: "session.compaction.ended", data: { sessionID: "s1", directory: dir } });
+    // compactBrain is fire-and-forget: poll for the marker (prune + consolidate are sync spawns).
+    let found = "";
+    for (let i = 0; i < 50 && !found; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      const out = execSync(
+        `python3 -m positronic_ai query --sql "SELECT json_extract(features_json,'$.body_text') t FROM episode WHERE kind='consolidation' ORDER BY tau DESC LIMIT 1" --json`,
+        { cwd: dir, encoding: "utf-8" },
+      );
+      const rows = JSON.parse(out).results || [];
+      if (rows.length > 0) found = rows[0]?.t || "";
+    }
+    expect(found.length).toBeGreaterThan(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("legacy session.compacted still compacts", async () => {
+    const text = `${tag} legacy compact event still compacts`;
+    await handleV2Event(msgEvent(dir, "assistant", text));
+    await handleV2Event({ type: "session.compacted", data: { sessionID: "s1", directory: dir } });
+    let found = "";
+    for (let i = 0; i < 50 && !found; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      const out = execSync(
+        `python3 -m positronic_ai query --sql "SELECT json_extract(features_json,'$.body_text') t FROM episode WHERE kind='consolidation' ORDER BY tau DESC LIMIT 1" --json`,
+        { cwd: dir, encoding: "utf-8" },
+      );
+      const rows = JSON.parse(out).results || [];
+      if (rows.length > 0) found = rows[0]?.t || "";
+    }
+    expect(found.length).toBeGreaterThan(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("Fix 6+7 — python and directory resolution", () => {
