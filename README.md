@@ -180,6 +180,17 @@ Project-local:
 curl -fsSL https://raw.githubusercontent.com/ShingWong/positronic-opencode-plugin/beta/install.sh | bash -s -- --project
 ```
 
+Global installs load the plugin from opencode's config instead of
+`<project>/.opencode/plugins/`, so the *project* dir can't be derived from the
+plugin file path. The plugin resolves it from `POSITRONIC_PROJECT_DIR` /
+`PluginInput`, falling back to `cwd`. If you run a shared `opencode serve`
+daemon from `$HOME`, set the env var so live ingestion lands in the right
+project:
+
+```bash
+POSITRONIC_PROJECT_DIR=/path/to/project opencode serve
+```
+
 Needs only `git`, `node >=18`, `npm`, `python3 >=3.10`.
 Tier 1 (lexical) works with zero setup.
 

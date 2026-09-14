@@ -115,6 +115,16 @@ positronic update --tail 50 --json         # {"logTail":[...]}
 
 ## Notes
 
+- **Project root resolution (Fix 10, global-install safe).** Live ingestion needs
+  the *project* dir, and opencode does not put it on v2 `session.*` events.
+  Resolution order: `POSITRONIC_PROJECT_DIR` env → `PluginInput.directory` /
+  `.worktree` → file-location `projectDir()` → `process.cwd()`. `setup` captures
+  `PluginInput` once (`setProjectRoot`), and `projectDir()` now claims a dir
+  only if it actually contains `.positronic/` — for a *global* install the
+  naive 3×dirname points at `~/.local/share/positronic`, which is
+  wrong-but-existent and would otherwise shadow the correct `cwd`. Prefer the
+  env var for daemons whose `cwd` is `$HOME`; a per-session `sessionDir()`
+  lookup (SDK `session.get`) handles multi-project services.
 - Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (11 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
 - 2.x: same verbs via `setup` + `ctx.tool.transform`, underscore names (`positronic_info` — core normalizes dots, accepted as-is). Verified live on 2.0.2: tools register, one `message.updated` → one episode, re-fires deduped, `recall` returns it verbatim.
 - CLI `dist/cli.js` dispatches `positronic <verb>` → same `run` (parity `--tail/--check/--status`).

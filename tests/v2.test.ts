@@ -23,7 +23,7 @@
 
 import { describe, test, expect, beforeEach } from "vitest";
 import { execSync } from "child_process";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { z } from "zod";
@@ -37,7 +37,11 @@ import plugin, {
   v2ResetIngestState,
   paiPython,
   projectDir,
+  projectRoot,
+  setProjectRoot,
+  sessionDir,
   toolDir,
+  asDir,
 } from "../src/index.js";
 
 function fakeCtx(opts?: { commands?: boolean; commandAdd?: boolean }) {
@@ -269,5 +273,81 @@ describe("Fix 6+7 — python and directory resolution", () => {
   test("projectDir resolves a directory or undefined, never throws", () => {
     const d = projectDir();
     expect(d === undefined || typeof d === "string").toBe(true);
+  });
+
+  test("projectDir claims only dirs containing .positronic", () => {
+    // repo umbrella has .positronic (or not) — either way it must not throw,
+    // and a bare temp dir must never be claimed even if path math landed there.
+    const d = projectDir();
+    if (d !== undefined) {
+      expect(existsSync(join(d, ".positronic"))).toBe(true);
+    }
+  });
+});
+
+// Fix 10 — project root from PluginInput (global-install safe), not file
+// location. ORDER MATTERS within this block: the env test runs first because
+// once setupV2 sets the module root it takes precedence over the env var
+// (same precedence as production).
+describe("Fix 10 — project root from PluginInput", () => {
+  test("ingest dir resolves from POSITRONIC_PROJECT_DIR, not file location", async () => {
+    const proj = mkdtempSync(join(tmpdir(), "pos-fix10-"));
+    seed(proj);
+    const tag = `fix10 ${Math.random().toString(36).slice(2, 9)} estuary relay logs tide tables`;
+    const text = `${tag} — Fix 10 global-install ingest must land in the project root`;
+    v2ResetIngestState();
+    const prev = process.env.POSITRONIC_PROJECT_DIR;
+    process.env.POSITRONIC_PROJECT_DIR = proj;
+    try {
+      // v2 session.text.ended carries no directory — must land in $proj.
+      await handleV2Event({ type: "session.text.ended", data: { sessionID: "s1", text } });
+      expect(recallCount(proj, tag)).toBe(1);
+    } finally {
+      if (prev === undefined) delete process.env.POSITRONIC_PROJECT_DIR;
+      else process.env.POSITRONIC_PROJECT_DIR = prev;
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("resolves ingest dir from PluginInput.directory, not file location", async () => {
+    // env wins over ctx.directory in production — clear it so this test
+    // proves the ctx path even on dev boxes that export the variable.
+    const prev = process.env.POSITRONIC_PROJECT_DIR;
+    delete process.env.POSITRONIC_PROJECT_DIR;
+    try {
+      (globalThis as any).__positronicV2Abort = undefined;
+      const f = fakeCtx();
+      await setupV2({ ...f.ctx, directory: "/proj/alpha", worktree: "/proj/alpha" });
+      expect(projectRoot()).toBe("/proj/alpha");
+    } finally {
+      if (prev !== undefined) process.env.POSITRONIC_PROJECT_DIR = prev;
+    }
+  });
+
+  test("sessionDir returns undefined without a client, never throws", async () => {
+    await expect(sessionDir(undefined)).resolves.toBeUndefined();
+    await expect(sessionDir("nope")).resolves.toBeUndefined();
+  });
+
+  test("setProjectRoot ignores empty input", () => {
+    const before = projectRoot();
+    setProjectRoot(undefined);
+    setProjectRoot("");
+    expect(projectRoot()).toBe(before);
+  });
+
+  test("asDir unwraps strings, rejects objects without path-likes", () => {
+    expect(asDir("/proj/a")).toBe("/proj/a");
+    expect(asDir("")).toBeUndefined();
+    expect(asDir(undefined)).toBeUndefined();
+    expect(asDir({ path: "/proj/wt" })).toBe("/proj/wt");
+    expect(asDir({ id: "abc" })).toBeUndefined();
+  });
+
+  test("setProjectRoot ignores non-string input (live [object Object] bug)", () => {
+    const before = projectRoot();
+    setProjectRoot({ path: "" } as any);
+    setProjectRoot({ id: "abc" } as any);
+    expect(projectRoot()).toBe(before);
   });
 });

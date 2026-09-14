@@ -50,8 +50,63 @@ export function projectDir() {
     // (3x dirname). Under vitest/dev (src/index.ts, dist/index.js) this resolves
     // to the repo umbrella instead — harmless: toolDir prefers args.dir and
     // ctx.directory first, and tests always pass explicit dirs.
+    //
+    // Fix 10 follow-up (live ai1 finding): for a GLOBAL install the derived dir
+    // (~/.local/share/positronic) is wrong-but-existent, and it SHADOWS the
+    // correct process.cwd() when the serve daemon runs inside the project.
+    // Only claim the dir when it quacks like a project (has .positronic/).
     try {
-        return path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+        const d = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+        try {
+            if (!fs.statSync(path.join(d, ".positronic")).isDirectory())
+                return undefined;
+        }
+        catch {
+            return undefined;
+        }
+        return d;
+    }
+    catch {
+        return undefined;
+    }
+}
+// Fix 10 — global-install safety. projectDir() (file-location, patch-2 Fix 7)
+// only holds for <project>/.opencode/plugins/positronic.js copies. opencode's
+// PluginInput carries the real project dir; prefer it, keep projectDir() as a
+// last-resort fallback for older hosts.
+let __posProjectRoot;
+// Live finding (ai1 serve): ctx.worktree can be an OBJECT, not a string —
+// blindly preferring it yields "v2 project root=[object Object]". Accept
+// only non-empty strings; unwrap common object shapes.
+export function asDir(v) {
+    if (typeof v === "string" && v)
+        return v;
+    if (v && typeof v === "object") {
+        for (const k of ["path", "directory", "root", "cwd"]) {
+            if (typeof v[k] === "string" && v[k])
+                return v[k];
+        }
+    }
+    return undefined;
+}
+export function setProjectRoot(dir) {
+    const d = asDir(dir);
+    if (d)
+        __posProjectRoot = d;
+}
+export function projectRoot() {
+    return __posProjectRoot || process.env.POSITRONIC_PROJECT_DIR || undefined;
+}
+// Fix 10d — per-session directory via the SDK client (multi-project services).
+// Stored from setupV2's PluginInput; sessionDir() resolves a sessionID to its
+// project directory so one service stays correct across many projects.
+let __posClient = undefined;
+export async function sessionDir(id) {
+    if (!id)
+        return undefined;
+    try {
+        const r = await __posClient?.session?.get?.({ path: { id } });
+        return r?.data?.directory || r?.directory || undefined;
     }
     catch {
         return undefined;
@@ -109,7 +164,7 @@ async function ingestLive(partsToIngest, dirHint, role = "assistant") {
         logIngest("ingest skip: empty text");
         return;
     }
-    const dir = dirHint || projectDir() || process.cwd();
+    const dir = dirHint || projectRoot() || projectDir() || process.cwd();
     // live flag + brain list come from PAI config (never loadConfig locally)
     const cfg = pai(["config", "--json"], { cwd: dir });
     if (!cfg.ok) {
@@ -221,8 +276,8 @@ async function pluginFactory(_input) {
                     return;
                 }
                 logIngest(`chat.message ingest role=${role} len=${parts.join("\n").length} session=${_input?.sessionID}`);
-                const sessionDir = _input?.directory || _input?.workspace?.directory || projectDir() || process.cwd();
-                await ingestLive(parts, sessionDir, isUser ? "user" : "assistant");
+                const msgDir = _input?.directory || _input?.workspace?.directory || projectRoot() || projectDir() || process.cwd();
+                await ingestLive(parts, msgDir, isUser ? "user" : "assistant");
             }
             catch (e) {
                 logIngest(`chat.message exception ${e?.message}`);
@@ -235,13 +290,13 @@ async function pluginFactory(_input) {
                 return;
             logIngest(`event type=${t} dir=${process.cwd()}`);
             if (t === "session.created") {
-                const dir = event?.properties?.directory || event?.directory || projectDir() || process.cwd();
+                const dir = event?.properties?.directory || event?.directory || projectRoot() || projectDir() || process.cwd();
                 const probe = pai(["info", "--json"], { cwd: dir });
                 logIngest(`session.created info probe dir=${dir} ok=${probe.ok}`);
                 return;
             }
             if (t === "session.compacted") {
-                const dir = event?.properties?.info?.directory || event?.properties?.directory || event?.directory || projectDir() || process.cwd();
+                const dir = event?.properties?.info?.directory || event?.properties?.directory || event?.directory || projectRoot() || projectDir() || process.cwd();
                 const sessionID = event?.properties?.sessionID || "";
                 void compactBrain(dir, sessionID);
                 return;
@@ -663,11 +718,12 @@ export async function handleV2Event(ev) {
         // --- stable v2 vocabulary: session.* events (only vocabulary on 2.0.2+ service) ---
         if (t === "session.text.ended") {
             const txt = typeof props.text === "string" ? props.text : "";
-            await ingestAssistantOnce(txt, props.directory || projectDir() || cwd, t);
+            const d = (await sessionDir(props.sessionID)) || props.directory || projectRoot() || projectDir() || cwd;
+            await ingestAssistantOnce(txt, d, t);
             return;
         }
         if (t === "session.compacted") {
-            const cdir = props.directory || projectDir() || cwd;
+            const cdir = props.directory || projectRoot() || projectDir() || cwd;
             const sessionID = props.sessionID || v2get(props, ["session", "id"], ["id"]) || "";
             void compactBrain(cdir, String(sessionID));
             return;
@@ -675,7 +731,7 @@ export async function handleV2Event(ev) {
         if (t === "session.execution.succeeded")
             return; // terminal noise, nothing to do
         if (t === "session.created") {
-            const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || projectDir() || cwd;
+            const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || projectRoot() || projectDir() || cwd;
             const probe = pai(["info", "--json"], { cwd: dir });
             logIngest("v2 session.created info probe dir=" + dir + " ok=" + probe.ok);
             return;
@@ -694,7 +750,7 @@ export async function handleV2Event(ev) {
                 parts.push(delta);
             if (parts.length === 0)
                 return;
-            await ingestAssistantOnce(parts.join("\n"), v2get(props, ["directory"], ["session", "directory"]) || projectDir() || cwd, t);
+            await ingestAssistantOnce(parts.join("\n"), v2get(props, ["directory"], ["session", "directory"]) || projectRoot() || projectDir() || cwd, t);
             return;
         }
         return;
@@ -704,6 +760,13 @@ export async function handleV2Event(ev) {
     }
 }
 export async function setupV2(ctx) {
+    // Fix 10 — PluginInput.directory/worktree is authoritative; env wins if set.
+    // asDir: worktree may arrive as an object — only strings stick.
+    setProjectRoot(process.env.POSITRONIC_PROJECT_DIR ||
+        (ctx && (asDir(ctx.directory) || asDir(ctx.worktree))) ||
+        undefined);
+    __posClient = ctx && ctx.client;
+    logIngest(`v2 project root=${projectRoot() || "(unresolved)"} raw=${JSON.stringify({ d: ctx && ctx.directory, w: ctx && ctx.worktree }).slice(0, 200)}`);
     const v1 = await pluginFactory({});
     const defs = (v1 && v1.tool) || {};
     try {
