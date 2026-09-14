@@ -57,11 +57,16 @@ export function projectDir() {
     // Only claim the dir when it quacks like a project (has .positronic/).
     try {
         const d = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+        let has = false;
         try {
-            if (!fs.statSync(path.join(d, ".positronic")).isDirectory())
-                return undefined;
+            has = fs.statSync(path.join(d, ".positronic")).isDirectory();
         }
         catch {
+            has = false;
+        }
+        if (!has) {
+            // Fix 11 — make the rejection visible (silent undefined hid the bug).
+            logIngest(`projectDir: rejected candidate ${d} (no .positronic/)`);
             return undefined;
         }
         return d;
@@ -94,26 +99,79 @@ export function setProjectRoot(dir) {
     if (d)
         __posProjectRoot = d;
 }
+export function v2ResetProjectRoot() { __posProjectRoot = undefined; }
+// Fix 11 — read the root from every plausible PluginInput shape. `worktree`
+// can be the worktree object (getter-backed `.directory`), and newer builds
+// add `location`/`project`.
+export function ctxRoot(ctx) {
+    return asDir(ctx?.directory) || asDir(ctx?.worktree) ||
+        asDir(ctx?.location) || asDir(ctx?.project) || undefined;
+}
+// Fix 11 — explicit root for global installs on builds that pass no directory.
+// One absolute path per line at ~/.config/positronic/project.
+export function configRoot() {
+    try {
+        // Prefer $HOME (operator/test-visible) over os.homedir().
+        const home = process.env.HOME || os.homedir();
+        const p = path.join(home, ".config", "positronic", "project");
+        const t = fs.readFileSync(p, "utf-8");
+        for (const line of t.split("\n")) {
+            const s = line.trim();
+            if (s && !s.startsWith("#"))
+                return s;
+        }
+        return undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
 export function projectRoot() {
-    return __posProjectRoot || process.env.POSITRONIC_PROJECT_DIR || undefined;
+    return __posProjectRoot || process.env.POSITRONIC_PROJECT_DIR || configRoot() || undefined;
 }
 // Fix 10d — per-session directory via the SDK client (multi-project services).
 // Stored from setupV2's PluginInput; sessionDir() resolves a sessionID to its
 // project directory so one service stays correct across many projects.
+// Fix 11 — cache sessionID→dir, and log once when the client is absent
+// (silent no-op hid whether ctx.client even exists on the build).
 let __posClient = undefined;
+const __posSessionDirs = new Map();
+let __posSessionDirNoClientLogged = false;
+export function setPosClient(client) { __posClient = client; }
+export function v2ResetSessionDirs() {
+    __posSessionDirs.clear();
+    __posSessionDirNoClientLogged = false;
+    __posClient = undefined;
+}
 export async function sessionDir(id) {
     if (!id)
         return undefined;
+    const cached = __posSessionDirs.get(id);
+    if (cached)
+        return cached;
+    if (!__posClient) {
+        if (!__posSessionDirNoClientLogged) {
+            __posSessionDirNoClientLogged = true;
+            logIngest("sessionDir: no client");
+        }
+        return undefined;
+    }
     try {
         const r = await __posClient?.session?.get?.({ path: { id } });
-        return r?.data?.directory || r?.directory || undefined;
+        const d = r?.data?.directory || r?.directory || undefined;
+        if (d) {
+            if (__posSessionDirs.size > 5000)
+                __posSessionDirs.clear();
+            __posSessionDirs.set(id, d);
+        }
+        return d;
     }
     catch {
         return undefined;
     }
 }
 export function toolDir(args, ctx) {
-    return args?.dir || ctx?.directory || projectDir() || process.cwd();
+    return args?.dir || ctx?.directory || projectRoot() || projectDir() || process.cwd();
 }
 function pai(argv, opts) {
     try {
@@ -763,10 +821,30 @@ export async function setupV2(ctx) {
     // Fix 10 — PluginInput.directory/worktree is authoritative; env wins if set.
     // asDir: worktree may arrive as an object — only strings stick.
     setProjectRoot(process.env.POSITRONIC_PROJECT_DIR ||
-        (ctx && (asDir(ctx.directory) || asDir(ctx.worktree))) ||
+        ctxRoot(ctx) ||
         undefined);
-    __posClient = ctx && ctx.client;
-    logIngest(`v2 project root=${projectRoot() || "(unresolved)"} raw=${JSON.stringify({ d: ctx && ctx.directory, w: ctx && ctx.worktree }).slice(0, 200)}`);
+    setPosClient(ctx && ctx.client);
+    // Fix 11 diagnostics: beta builds may pass an empty ctx — surface exactly
+    // what is available so the global-install root question is answerable.
+    // JSON.stringify hides getters/class props, so probe keys + candidate reads.
+    const probe = (v) => {
+        if (v == null)
+            return String(v);
+        if (typeof v !== "object")
+            return `${typeof v}:${String(v).slice(0, 40)}`;
+        let keys = "";
+        try {
+            keys = Object.keys(v).slice(0, 8).join("|");
+        }
+        catch {
+            keys = "?";
+        }
+        return `obj{${keys}}`;
+    };
+    logIngest(`v2 setup keys=${Object.keys(ctx || {}).join(",")} client=${typeof ctx?.client} session=${typeof ctx?.session} event=${typeof ctx?.event} tool=${typeof ctx?.tool}`);
+    logIngest(`v2 setup probes directory=${probe(ctx?.directory)} worktree=${probe(ctx?.worktree)} location=${probe(ctx?.location)} project=${probe(ctx?.project)} client=${probe(ctx?.client)}`);
+    logIngest(`v2 setup asDir dir=${asDir(ctx?.directory)} worktree=${asDir(ctx?.worktree)} location=${asDir(ctx?.location)} project=${asDir(ctx?.project)} ctxRoot=${ctxRoot(ctx)}`);
+    logIngest(`v2 project root=${projectRoot() || "(unresolved)"} (env=${process.env.POSITRONIC_PROJECT_DIR ? "set" : "unset"} config=${configRoot() ? "set" : "unset"})`);
     const v1 = await pluginFactory({});
     const defs = (v1 && v1.tool) || {};
     try {

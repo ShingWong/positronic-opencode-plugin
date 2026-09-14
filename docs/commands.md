@@ -115,16 +115,29 @@ positronic update --tail 50 --json         # {"logTail":[...]}
 
 ## Notes
 
-- **Project root resolution (Fix 10, global-install safe).** Live ingestion needs
-  the *project* dir, and opencode does not put it on v2 `session.*` events.
-  Resolution order: `POSITRONIC_PROJECT_DIR` env → `PluginInput.directory` /
-  `.worktree` → file-location `projectDir()` → `process.cwd()`. `setup` captures
-  `PluginInput` once (`setProjectRoot`), and `projectDir()` now claims a dir
-  only if it actually contains `.positronic/` — for a *global* install the
-  naive 3×dirname points at `~/.local/share/positronic`, which is
-  wrong-but-existent and would otherwise shadow the correct `cwd`. Prefer the
-  env var for daemons whose `cwd` is `$HOME`; a per-session `sessionDir()`
-  lookup (SDK `session.get`) handles multi-project services.
+- **Project root resolution (Fix 10, Fix 11).** Live ingestion needs the
+  *project* dir, and opencode does not put it on v2 `session.*` events. On some
+  beta builds (`v0.0.0-beta-17823`) `setup(ctx).directory`/`project` are
+  **undefined**, `ctx.worktree` is an **API object** (`list|create|remove|…`,
+  not a path), and `ctx.client` is **undefined**. The real project dir lives in
+  **`ctx.location.directory`** (probed live). Resolution order:
+  `POSITRONIC_PROJECT_DIR` env → `PluginInput.directory` → `.worktree` →
+  `.location` → `.project` → `~/.config/positronic/project` (one absolute path
+  line, first non-empty/`#`-free) → file-location `projectDir()` → `process.cwd()`.
+  - `setup` captures `PluginInput` once (`ctxRoot` → `setProjectRoot`) and logs
+    `ctx` keys, per-field probes, and env/config presence.
+  - **`toolDir()` consults `projectRoot()`** (Fix 11) — previously tools ignored
+    the env var entirely.
+  - `projectDir()` claims a dir only if it contains `.positronic/` (a global
+    install's 3×dirname points at a wrong-but-existent dir that would shadow
+    `cwd`); rejection is logged.
+  - `sessionDir()` looks up a session's dir via the SDK client and **caches
+    `sessionID→dir`**; logs `sessionDir: no client` once if the build omits it
+    (beta-17823 does — `client=undefined`).
+  - **Override for a global install / daemon started outside the project**: set
+    `POSITRONIC_PROJECT_DIR=/path/to/project`, or write the path to
+    `~/.config/positronic/project`. On beta-17823 the `ctx.location.directory`
+    fallback usually suffices when the daemon runs in the project.
 - Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (11 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
 - 2.x: same verbs via `setup` + `ctx.tool.transform`, underscore names (`positronic_info` — core normalizes dots, accepted as-is). Verified live on 2.0.2: tools register, one `message.updated` → one episode, re-fires deduped, `recall` returns it verbatim.
 - CLI `dist/cli.js` dispatches `positronic <verb>` → same `run` (parity `--tail/--check/--status`).

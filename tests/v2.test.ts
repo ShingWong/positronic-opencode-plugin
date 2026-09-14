@@ -21,9 +21,9 @@
 //  1. execute() resolving a bare string -> "Te is not an Object" on 2.x
 //  2. per-delta / re-fire duplicate ingestion (one episode per message)
 
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, beforeEach, afterAll } from "vitest";
 import { execSync } from "child_process";
-import { mkdtempSync, rmSync, existsSync } from "fs";
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { z } from "zod";
@@ -39,7 +39,12 @@ import plugin, {
   projectDir,
   projectRoot,
   setProjectRoot,
+  v2ResetProjectRoot,
+  ctxRoot,
+  configRoot,
   sessionDir,
+  setPosClient,
+  v2ResetSessionDirs,
   toolDir,
   asDir,
 } from "../src/index.js";
@@ -349,5 +354,79 @@ describe("Fix 10 — project root from PluginInput", () => {
     setProjectRoot({ path: "" } as any);
     setProjectRoot({ id: "abc" } as any);
     expect(projectRoot()).toBe(before);
+  });
+});
+
+// Fix 11 — beta builds pass no directory at setup; make the root resolvable
+// from env / a config file, wire tools to it, and make sessionDir cacheable.
+describe("Fix 11 — explicit root + toolDir parity + sessionDir cache", () => {
+  const savedHome = process.env.HOME;
+  const savedEnv = process.env.POSITRONIC_PROJECT_DIR;
+
+  beforeEach(() => {
+    v2ResetProjectRoot();
+    v2ResetSessionDirs();
+    delete process.env.POSITRONIC_PROJECT_DIR;
+  });
+
+  afterAll(() => {
+    v2ResetProjectRoot();
+    v2ResetSessionDirs();
+    if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome;
+    if (savedEnv === undefined) delete process.env.POSITRONIC_PROJECT_DIR;
+    else process.env.POSITRONIC_PROJECT_DIR = savedEnv;
+  });
+
+  test("toolDir now consults projectRoot()/env (was ignoring POSITRONIC_PROJECT_DIR)", () => {
+    process.env.POSITRONIC_PROJECT_DIR = "/tmp/envproj";
+    expect(toolDir({}, {})).toBe("/tmp/envproj");
+    // explicit args.dir still wins
+    expect(toolDir({ dir: "/a" }, { directory: "/b" })).toBe("/a");
+    expect(toolDir({}, { directory: "/b" })).toBe("/b");
+  });
+
+  test("configRoot reads $HOME/.config/positronic/project (first line)", () => {
+    const home = mkdtempSync(join(tmpdir(), "pos-home-"));
+    process.env.HOME = home;
+    expect(configRoot()).toBeUndefined();
+    const dir = join(home, ".config", "positronic");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "project"), "\n  /proj/from-config  \nignored\n");
+    expect(configRoot()).toBe("/proj/from-config");
+    expect(projectRoot()).toBe("/proj/from-config");
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("sessionDir caches sessionID→dir and calls the client once", async () => {
+    let calls = 0;
+    setPosClient({ session: { get: async () => { calls++; return { data: { directory: "/proj/s1" } }; } } });
+    expect(await sessionDir("s1")).toBe("/proj/s1");
+    expect(await sessionDir("s1")).toBe("/proj/s1");
+    expect(calls).toBe(1);
+  });
+
+  test("sessionDir returns undefined with no client, never throws", async () => {
+    expect(await sessionDir("nope")).toBeUndefined();
+  });
+
+  test("ctxRoot reads directory/worktree/location/project, incl. getter objects", () => {
+    expect(ctxRoot({ directory: "/d" })).toBe("/d");
+    expect(ctxRoot({ worktree: { directory: "/w" } })).toBe("/w");
+    expect(ctxRoot({ worktree: { path: "/wp" } })).toBe("/wp");
+    expect(ctxRoot({ location: { path: "/l" } })).toBe("/l");
+    expect(ctxRoot({ project: { root: "/p" } })).toBe("/p");
+    expect(ctxRoot({ worktree: {} })).toBeUndefined();
+    expect(ctxRoot({})).toBeUndefined();
+    // getter-backed object (JSON.stringify shows {})
+    const wt: any = {};
+    Object.defineProperty(wt, "directory", { get: () => "/getter", enumerable: false });
+    expect(ctxRoot({ worktree: wt })).toBe("/getter");
+  });
+
+  test("setupV2 resolves root from ctx.location when directory/worktree are empty", async () => {
+    (globalThis as any).__positronicV2Abort = undefined;
+    const f = fakeCtx();
+    await setupV2({ ...f.ctx, worktree: {}, location: { path: "/proj/loc" } });
+    expect(projectRoot()).toBe("/proj/loc");
   });
 });

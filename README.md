@@ -184,11 +184,11 @@ Global installs load the plugin from opencode's config instead of
 `<project>/.opencode/plugins/`, so the *project* dir can't be derived from the
 plugin file path. The plugin resolves it from `POSITRONIC_PROJECT_DIR` /
 `PluginInput`, falling back to `cwd`. If you run a shared `opencode serve`
-daemon from `$HOME`, set the env var so live ingestion lands in the right
-project:
+daemon from `$HOME` — or your build passes no directory at all — set one of:
 
 ```bash
-POSITRONIC_PROJECT_DIR=/path/to/project opencode serve
+POSITRONIC_PROJECT_DIR=/path/to/project opencode serve    # env
+echo /path/to/project > ~/.config/positronic/project     # config file
 ```
 
 Needs only `git`, `node >=18`, `npm`, `python3 >=3.10`.
