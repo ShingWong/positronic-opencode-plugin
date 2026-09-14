@@ -24,6 +24,27 @@ positronic init --embed remote --base-url $REMOTE_EMBED_URL
 # config: .positronic/config.json → embed.remote_url / remote_key
 ```
 
+**LAN bge also works as `local` tier** — if bge-m3 runs on a LAN host
+(same box or another on the LAN), do NOT use `remote`: use `local` and
+point at the LAN URL:
+
+```bash
+positronic init --embed local
+positronic config embed.local_url http://<host>:8090   # LAN bge, not API
+# config: .positronic/config.json → embed.local_url
+```
+
+`remote` tier is API-key style only. `local` tier is a running bge-m3
+server (`:8090` on this box, or LAN host) — see Tier 3 for setup.
+
+**Chunking + 2048 ceiling**: bge-m3 caps requests at ~2048 tokens (HTTP
+500 "too large to process"). PAI chunks text via
+`positronic_ai.chunk.chunk_markdown` (7000-char budget, 1-sentence
+overlap, `Subject:` prefix) before embedding, then mean-pools chunk
+vectors into one body_embed. Halve-and-resend up to 5 levels on size
+errors, loud raise after that (see `embedded`/`embed_reason` in ingest
+results).
+
 ## Tier 3 — Local BGE-M3 (recommended, 18–35ms) ⭐
 
 ### 1) Install llama.cpp
