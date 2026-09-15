@@ -353,7 +353,7 @@ async function pluginFactory(_input) {
                 logIngest(`session.created info probe dir=${dir} ok=${probe.ok}`);
                 return;
             }
-            if (t === "session.compacted") {
+            if (t === "session.compacted" || t === "session.compaction.ended") {
                 const dir = event?.properties?.info?.directory || event?.properties?.directory || event?.directory || projectRoot() || projectDir() || process.cwd();
                 const sessionID = event?.properties?.sessionID || "";
                 void compactBrain(dir, sessionID);
@@ -780,7 +780,7 @@ export async function handleV2Event(ev) {
             await ingestAssistantOnce(txt, d, t);
             return;
         }
-        if (t === "session.compacted") {
+        if (t === "session.compacted" || t === "session.compaction.ended") {
             const cdir = props.directory || projectRoot() || projectDir() || cwd;
             const sessionID = props.sessionID || v2get(props, ["session", "id"], ["id"]) || "";
             void compactBrain(cdir, String(sessionID));
