@@ -294,6 +294,59 @@ async function compactBrain(dir, sessionID) {
         logPrune(`compact exception dir=${dir} err=${e?.message}`);
     }
 }
+// Post-compaction brain-first reminder. The `context` session hook edits
+// only the OUTGOING model call — never persisted history — so the reminder
+// text itself can never be ingested into the brain. Exposure is bounded:
+// each compacted session gets BRAIN_REMINDER_BUDGET injections, then
+// silence. (Unbounded injection risks the model echoing the rule into
+// ingested answers, and per-model reactions to injected instructions are
+// unpredictable — so: short text, post-compaction only, then stop.)
+export const BRAIN_REMINDER_BUDGET = 2;
+export const BRAIN_REMINDER_TEXT = "Memory rule: query the positronic brain (positronic_recall / positronic_query) before answering project questions — do not re-derive from files what the brain holds.";
+const __reminderBudget = new Map();
+export function markCompacted(sessionID) {
+    if (sessionID)
+        __reminderBudget.set(String(sessionID), BRAIN_REMINDER_BUDGET);
+}
+export function takeReminder(sessionID) {
+    const k = String(sessionID || "");
+    if (!k)
+        return null;
+    const left = __reminderBudget.get(k);
+    if (!left)
+        return null;
+    if (left <= 1)
+        __reminderBudget.delete(k);
+    else
+        __reminderBudget.set(k, left - 1);
+    return BRAIN_REMINDER_TEXT;
+}
+export function v2ResetReminders() { __reminderBudget.clear(); }
+export function registerReminderHook(ctx) {
+    try {
+        if (globalThis.__positronicReminderHook)
+            return true;
+        if (typeof ctx?.session?.hook !== "function") {
+            logIngest("reminder hook unsupported (no ctx.session.hook)");
+            return false;
+        }
+        void ctx.session.hook("context", (event) => {
+            try {
+                const text = takeReminder(event?.sessionID);
+                if (text && Array.isArray(event?.system))
+                    event.system.push({ type: "text", text });
+            }
+            catch { }
+        });
+        globalThis.__positronicReminderHook = true;
+        logIngest("reminder hook registered");
+        return true;
+    }
+    catch (e) {
+        logIngest("reminder hook err " + ((e && e.message) || e));
+        return false;
+    }
+}
 // Collect assistant-message text for ingestion, deliberately EXCLUDING
 // reasoning/thinking parts: they are process, not decision. The answer part
 // already carries the conclusion; ingesting the reasoning trace would let a
@@ -783,6 +836,7 @@ export async function handleV2Event(ev) {
         if (t === "session.compacted" || t === "session.compaction.ended") {
             const cdir = props.directory || projectRoot() || projectDir() || cwd;
             const sessionID = props.sessionID || v2get(props, ["session", "id"], ["id"]) || "";
+            markCompacted(String(sessionID));
             void compactBrain(cdir, String(sessionID));
             return;
         }
@@ -865,6 +919,9 @@ export async function setupV2(ctx) {
     catch (e) {
         logIngest("v2 tool register err " + (e && e.message));
     }
+    // Post-compaction brain-first reminder (bounded context hook — see
+    // registerReminderHook; no-op with a log line when the host lacks it).
+    registerReminderHook(ctx);
     // Fix 9 — slash commands via ctx.command.transform, GUARDED. Older beta
     // builds lack editor.add on commands and a raw call aborts the whole plugin
     // load; v2.0.2 supports .add. Each command re-prompts its verb (steer).

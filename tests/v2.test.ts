@@ -467,3 +467,57 @@ describe("Fix 11 — explicit root + toolDir parity + sessionDir cache", () => {
     expect(projectRoot()).toBe("/proj/loc");
   });
 });
+
+describe("Post-compaction brain-first reminder", () => {
+  test("takeReminder is inert without compaction, budgeted after, then silent", async () => {
+    const m = await import("../src/index.js");
+    m.v2ResetReminders();
+    expect(m.takeReminder("ses_x")).toBeNull();
+    m.markCompacted("ses_x");
+    expect(m.takeReminder("ses_x")).toBe(m.BRAIN_REMINDER_TEXT);
+    expect(m.takeReminder("ses_x")).toBe(m.BRAIN_REMINDER_TEXT);
+    expect(m.takeReminder("ses_x")).toBeNull();
+    expect(m.takeReminder("")).toBeNull();
+    m.v2ResetReminders();
+  });
+
+  test("session.compacted event arms the budget", async () => {
+    const m = await import("../src/index.js");
+    m.v2ResetReminders();
+    await m.handleV2Event({ type: "session.compacted", data: { sessionID: "ses_c", directory: tmpdir() } });
+    expect(m.takeReminder("ses_c")).toBe(m.BRAIN_REMINDER_TEXT);
+    m.v2ResetReminders();
+  });
+
+  test("registerReminderHook pushes system text only within budget", async () => {
+    const m = await import("../src/index.js");
+    m.v2ResetReminders();
+    (globalThis as any).__positronicReminderHook = undefined;
+    const calls: any[] = [];
+    const ctx: any = { session: { hook: async (_kind: string, fn: any) => { calls.push(fn); } } };
+    expect(m.registerReminderHook(ctx)).toBe(true);
+    expect(calls.length).toBe(1);
+    // second setup must not double-register (would burn budget 2x per call)
+    expect(m.registerReminderHook(ctx)).toBe(true);
+    expect(calls.length).toBe(1);
+    const ev: any = { sessionID: "ses_h", system: [] };
+    calls[0](ev);
+    expect(ev.system).toEqual([]);
+    m.markCompacted("ses_h");
+    calls[0](ev);
+    expect(ev.system.length).toBe(1);
+    expect(ev.system[0].text).toContain("positronic_recall");
+    calls[0](ev);
+    calls[0](ev);
+    expect(ev.system.length).toBe(2);
+    (globalThis as any).__positronicReminderHook = undefined;
+    m.v2ResetReminders();
+  });
+
+  test("registerReminderHook no-ops with a log when host lacks session.hook", async () => {
+    const m = await import("../src/index.js");
+    (globalThis as any).__positronicReminderHook = undefined;
+    expect(m.registerReminderHook({})).toBe(false);
+    expect(m.registerReminderHook(undefined)).toBe(false);
+  });
+});
