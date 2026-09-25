@@ -305,8 +305,10 @@ export const BRAIN_REMINDER_BUDGET = 2;
 export const BRAIN_REMINDER_TEXT = "Memory rule: query the positronic brain (positronic_recall / positronic_query) before answering project questions — do not re-derive from files what the brain holds.";
 const __reminderBudget = new Map();
 export function markCompacted(sessionID) {
-    if (sessionID)
+    if (sessionID) {
         __reminderBudget.set(String(sessionID), BRAIN_REMINDER_BUDGET);
+        logIngest(`reminder armed session=${sessionID} budget=${BRAIN_REMINDER_BUDGET}`);
+    }
 }
 export function takeReminder(sessionID) {
     const k = String(sessionID || "");
@@ -319,6 +321,7 @@ export function takeReminder(sessionID) {
         __reminderBudget.delete(k);
     else
         __reminderBudget.set(k, left - 1);
+    logIngest(`reminder inject session=${k} left=${Math.max(left - 1, 0)}`);
     return BRAIN_REMINDER_TEXT;
 }
 export function v2ResetReminders() { __reminderBudget.clear(); }
