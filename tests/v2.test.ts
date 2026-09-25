@@ -356,12 +356,15 @@ describe("Fix 10 — project root from PluginInput", () => {
     // proves the ctx path even on dev boxes that export the variable.
     const prev = process.env.POSITRONIC_PROJECT_DIR;
     delete process.env.POSITRONIC_PROJECT_DIR;
+    const proj = mkdtempSync(join(tmpdir(), "pos-fix10-dir-"));
+    mkdirSync(join(proj, ".positronic"), { recursive: true });
     try {
       (globalThis as any).__positronicV2Abort = undefined;
       const f = fakeCtx();
-      await setupV2({ ...f.ctx, directory: "/proj/alpha", worktree: "/proj/alpha" });
-      expect(projectRoot()).toBe("/proj/alpha");
+      await setupV2({ ...f.ctx, directory: proj, worktree: proj });
+      expect(projectRoot()).toBe(proj);
     } finally {
+      rmSync(proj, { recursive: true, force: true });
       if (prev !== undefined) process.env.POSITRONIC_PROJECT_DIR = prev;
     }
   });
@@ -463,8 +466,34 @@ describe("Fix 11 — explicit root + toolDir parity + sessionDir cache", () => {
   test("setupV2 resolves root from ctx.location when directory/worktree are empty", async () => {
     (globalThis as any).__positronicV2Abort = undefined;
     const f = fakeCtx();
-    await setupV2({ ...f.ctx, worktree: {}, location: { path: "/proj/loc" } });
-    expect(projectRoot()).toBe("/proj/loc");
+    const proj = mkdtempSync(join(tmpdir(), "pos-fix11-loc-"));
+    mkdirSync(join(proj, ".positronic"), { recursive: true });
+    try {
+      await setupV2({ ...f.ctx, worktree: {}, location: { path: proj } });
+      expect(projectRoot()).toBe(proj);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("setupV2 refuses a root without .positronic/ (multi-project clobber guard)", async () => {
+    // Live bug: the serve daemon's multi-project service ran setup() twice —
+    // the second call passed the daemon cwd (no .positronic/) and clobbered
+    // the real project root, so every brain tool fell back to PAI defaults.
+    (globalThis as any).__positronicV2Abort = undefined;
+    const f = fakeCtx();
+    const proj = mkdtempSync(join(tmpdir(), "pos-fix11-ok-"));
+    const home = mkdtempSync(join(tmpdir(), "pos-fix11-home-"));
+    mkdirSync(join(proj, ".positronic"), { recursive: true });
+    try {
+      await setupV2({ ...f.ctx, directory: proj });
+      expect(projectRoot()).toBe(proj);
+      await setupV2({ ...f.ctx, directory: home });
+      expect(projectRoot()).toBe(proj);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

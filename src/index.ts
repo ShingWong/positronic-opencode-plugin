@@ -83,7 +83,20 @@ export function asDir(v: any): string | undefined {
 }
 export function setProjectRoot(dir?: any): void {
   const d = asDir(dir);
-  if (d) __posProjectRoot = d;
+  if (!d) return;
+  // Root guard — a multi-project service calls setup() once per project and
+  // the last write won: the serve daemon's home dir (no .positronic/) claimed
+  // the root and every brain tool fell back to PAI defaults, looking for
+  // ~/.positronic/brains/kairos/memory.db. Same rule as projectDir(): only
+  // claim a dir that quacks like a project. Env/config roots re-read in
+  // projectRoot() are unaffected by this guard.
+  let has = false;
+  try { has = fs.statSync(path.join(d, ".positronic")).isDirectory(); } catch { has = false; }
+  if (has) {
+    __posProjectRoot = d;
+  } else {
+    logIngest(`setProjectRoot: rejected ${d} (no .positronic/)`);
+  }
 }
 export function v2ResetProjectRoot(): void { __posProjectRoot = undefined; }
 // Fix 11 — read the root from every plausible PluginInput shape. `worktree`
