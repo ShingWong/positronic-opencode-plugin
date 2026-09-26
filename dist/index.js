@@ -483,7 +483,7 @@ async function pluginFactory(_input) {
             "positronic.init": {
                 description: "init .positronic/brains (warn if exists, --force to overwrite; --live/--no-live)",
                 args: {
-                    brain: z.string().optional().describe("brain name (default kairos)"),
+                    brain: z.string().optional().describe("brain name (default postronic)"),
                     profile: z.string().optional().describe("retention balanced|long_term|archival|short_term"),
                     embed: z.string().optional().describe("embed lexical|local|remote"),
                     force: z.boolean().optional().describe("overwrite existing brain"),
@@ -495,7 +495,7 @@ async function pluginFactory(_input) {
                     const dir = toolDir(args, ctx);
                     let brains = args?.brains;
                     if ((!brains || (Array.isArray(brains) && brains.length === 0)) && (args?.brain || args?.profile || args?.embed)) {
-                        brains = [{ name: args.brain || "kairos", profile: args.profile || "balanced", embed: args.embed || "lexical" }];
+                        brains = [{ name: args.brain || "postronic", profile: args.profile || "balanced", embed: args.embed || "lexical" }];
                     }
                     const argv = ["init"];
                     if (Array.isArray(brains) && brains.length > 0) {
@@ -603,7 +603,7 @@ async function pluginFactory(_input) {
                 },
                 execute: async (args, ctx) => {
                     const dir = toolDir(args, ctx);
-                    const argv = ["brain-test", "--brain", args?.brain || "kairos", "--k", String(args?.k ?? 3)];
+                    const argv = ["brain-test", ...(args?.brain ? ["--brain", args.brain] : []), "--k", String(args?.k ?? 3)];
                     argv.push("--json");
                     const r = pai(argv, { cwd: dir });
                     return JSON.stringify(r.ok ? r.json : { error: r.error });

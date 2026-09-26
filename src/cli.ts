@@ -29,14 +29,14 @@ const usage = `Usage: positronic <verb> [--json] [--brain <name>] ...
   verbs: init | info | stats | config | brain-test | llm-stat | llm-setup | update | doctor | delete | query | prune | consolidate | ingest | recall | ask | wake
   examples:
     positronic info --json
-    positronic stats --brain kairos --json
-    positronic config profile archival --brain kairos --confirm --json
+    positronic stats --brain postronic --json
+    positronic config profile archival --brain postronic --confirm --json
     positronic brain-test --k 3 --json
-    positronic query "memory engine" --brain kairos --k 8 --json
-    positronic query --sql "SELECT COUNT(*) AS n FROM episode" --brain kairos --json
-    positronic query --anchors --brain kairos --json
-    positronic query --objects --brain kairos --json
-    positronic query --sightings --brain kairos --json
+    positronic query "memory engine" --brain postronic --k 8 --json
+    positronic query --sql "SELECT COUNT(*) AS n FROM episode" --brain postronic --json
+    positronic query --anchors --brain postronic --json
+    positronic query --objects --brain postronic --json
+    positronic query --sightings --brain postronic --json
     positronic llm-stat --json
     positronic llm-setup --tier 3 --json
     positronic update --check --json | --tail 50 | --status <jobId>
