@@ -137,42 +137,21 @@ PY
 fi
 cat "$TARGET" | head -n 20
 
-# --- slash commands ---
-log "Installing slash commands -> $COMMANDS_DIR"
-mkdir -p "$COMMANDS_DIR"
-# generate from plugin's positronicCommands (or use template)
-for name in init info stats config brain-test llm-stat llm-setup update delete query; do
-  # map name to file: positronic-<name>.md
-  file="$COMMANDS_DIR/positronic-$name.md"
-  case "$name" in
-    init) desc="Positronic init — create brain (warn if exists, --force)"; body="Call positronic.init to create a brain. Args: \$ARGUMENTS (e.g. --brain kairos --profile long_term --embed lexical --live --force)" ;;
-    info) desc="Positronic info — version + brains + tiers"; body="Call positronic.info and summarize. Args: \$ARGUMENTS" ;;
-    stats) desc="Positronic stats — federated episode counts per brain"; body="Call positronic.stats and summarize episodes per brain and horizon hint. Args: \$ARGUMENTS (optional --brain <name>)" ;;
-    config) desc="Positronic config — get/set .positronic/config.json"; body="Call positronic.config. Args: \$ARGUMENTS" ;;
-    brain-test) desc="Positronic brain-test — probe new_event -> activate"; body="Call positronic.brain-test. Args: \$ARGUMENTS" ;;
-    llm-stat) desc="Positronic llm-stat — bge/llama tier health"; body="Call positronic.llm-stat. Args: \$ARGUMENTS" ;;
-    llm-setup) desc="Positronic llm-setup — tier guide (606MB bge-m3)"; body="Call positronic.llm-setup. Args: \$ARGUMENTS" ;;
-    update) desc="Positronic update — deferred update --check/--tail/--status"; body="Call positronic.update. Args: \$ARGUMENTS" ;;
-    delete) desc="Positronic delete — delete brain (warn, --force)"; body="Call positronic.delete. Args: \$ARGUMENTS" ;;
-    query) desc="Positronic query — FTS5/RRF recall, SQL, anchors, objects, sightings"; body="Use positronic.query to search brain memory. Examples: query \"<text>\" --k 8, --sql \"SELECT ...\", --anchors, --objects, --sightings. Args: \$ARGUMENTS" ;;
-  esac
-  cat > "$file" <<EOF
----
-description: $desc
-agent: build
-model: openrouter/meta/muse-spark-1.2-contributor
----
-
-$body
-EOF
-done
-ls -1 "$COMMANDS_DIR"/positronic-*.md 2>&1 | head -n 20
+# --- legacy dash command files (purged) ---
+# /positronic:* palette entries are registered by the plugin itself
+# (src/index.ts positronicCommands). The old generated positronic-*.md
+# files duplicated every verb as /positronic-<verb> and pinned a stale
+# model, so the palette listed each command twice. Purge them.
+if ls "$COMMANDS_DIR"/positronic-*.md >/dev/null 2>&1; then
+  log "Removing legacy dash command files -> $COMMANDS_DIR"
+  rm -f "$COMMANDS_DIR"/positronic-*.md
+fi
 
 # --- verify ---
 log "Verifying..."
 node "$PLUGIN_DIR/dist/cli.js" info --json 2>&1 | head -n 20 || warn "cli info failed"
 if grep -q "positronic-opencode-plugin" "$TARGET"; then log "Config OK: $TARGET"; else warn "Config missing plugin entry"; fi
-if [ -f "$COMMANDS_DIR/positronic-stats.md" ]; then log "Slash commands OK"; fi
+if ls "$COMMANDS_DIR"/positronic-*.md >/dev/null 2>&1; then warn "Legacy dash command files still present"; else log "Slash commands OK (single set: /positronic:*)"; fi
 if [ -f "$PLUGIN_DIR/dist/index.js" ] && grep -q "chat.message" "$PLUGIN_DIR/dist/index.js"; then log "Build OK: chat.message hook present"; else warn "Build missing chat.message"; fi
 
 cat <<EOF

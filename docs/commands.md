@@ -28,7 +28,7 @@ positronic init --brain research --profile archival --embed remote --force --jso
 # Every brain ingests live by default — /usr/local/devel/positronic lives, brain_henry/state/memory.db is test data (to be deleted)
 ```
 
-11 flat commands. Same `src/commands/*: run` backs slash palette `/positronic:<verb>`, agentic `tool_call`, and shell `positronic <verb>`.
+12 flat commands. Each verb routes to PAI (`python3 -m positronic_ai <verb>`) and backs the slash palette `/positronic:<verb>`, agentic `tool_call`, and shell `positronic <verb>`.
 
 | Slash (palette ` /`) | Tool (`tool_call`) | CLI | Flags | Output (`--json`) |
 |---|---|---|---|---|
@@ -40,6 +40,8 @@ positronic init --brain research --profile archival --embed remote --force --jso
 | `/positronic:llm-stat` | `positronic.llm-stat` | `positronic llm-stat` | `[--json]` | `{bge, llama, lexical, engram, pooling:cls|unknown}` (:8090 health, `bge-m3-Q8_0.gguf` dim 1024, pooling `cls` warning) |
 | `/positronic:llm-setup` | `positronic.llm-setup` | `positronic llm-setup` | `[--tier 1|2|3] [--json]` | `{tier, guide}` + human slice of `docs/llama.md` (Tier 3: `606MB bge-m3-Q8_0.gguf` + `bge-embed.service Restart=always`, no auto-build) |
 | `/positronic:update` | `positronic.update` | `positronic update` | `[--check] [--status <jobId>] [--tail N] [--pin v0.2.x] [--json]` | `--check:{behind,engramTagDiff,npmOutdated}` dry `git ls-remote`; default spawns `~/.cache/positronic/update-<jobId>.log`, returns `{jobId,status,logPath}`; `--status/--tail` polls log |
+| `/positronic:delete` | `positronic.delete` | `positronic delete --brain <name>` | `[--brain <name>] --force` | wipes the brain + `memory.db`; refuses without `--force` |
+| `/positronic:query` | `positronic.query` | `positronic query "<text>"` | `[--brain <name>] [--k N] [--sql <q>] [--anchors] [--objects] [--sightings] [--json]` | FTS5+RRF recall; flags swap the view (SQL rows, anchors, object graph, sightings) |
 | `/positronic:prune` | `positronic.prune` | `positronic prune` | `[--json]` | τ-decay `engine.prune()` on the live brain (skips `live:false`); `{ok, brain, scanned, day_merged, week_merged, expired, residues, objects_dormant, objects_forgotten}` |
 | `/positronic:consolidate` | `positronic.consolidate` | `positronic consolidate "<summary>"` | `[--brain <name>] [--arousal N] [--json]` | writes `kind='consolidation'` event; `{ok, brain, tau, encoded, episode_id}`; empty summary → `{ok:false}` |
 
@@ -138,7 +140,7 @@ positronic update --tail 50 --json         # {"logTail":[...]}
     `POSITRONIC_PROJECT_DIR=/path/to/project`, or write the path to
     `~/.config/positronic/project`. On beta-17823 the `ctx.location.directory`
     fallback usually suffices when the daemon runs in the project.
-- Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (11 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
+- Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (12 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
 - 2.x: same verbs via `setup` + `ctx.tool.transform`, underscore names (`positronic_info` — core normalizes dots, accepted as-is). Verified live on 2.0.2: tools register, one `message.updated` → one episode, re-fires deduped, `recall` returns it verbatim.
 - CLI `dist/cli.js` dispatches `positronic <verb>` → same `run` (parity `--tail/--check/--status`).
 - `session.compacted` → `compactBrain`: `prune` live brain + a content-carrying consolidation marker (`~/.cache/positronic/prune.log`).

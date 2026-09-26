@@ -108,6 +108,7 @@ pointing at one canonical entity). The engine preserves the family; the agent
 
 | Slash (`/`) palette | Tool | CLI | Notes |
 |---|---|---|---|
+| `/positronic:init` | `positronic.init` | `positronic init [--brain <name>] [--force] --json` | no args → help; warns if exists, `--force` overwrites |
 | `/positronic:info` | `positronic.info` | `positronic info --json` | version + ENGRAM_TAG + brains + tiers |
 | `/positronic:stats` | `positronic.stats` | `positronic stats [--brain kairos] --json` | `{episodes}` per `.positronic/brains/*/memory.db` |
 | `/positronic:config` | `positronic.config` | `positronic config [profile archival --confirm] --json` | `E7 55/55/35/7` confirm gate; blocks `*.db` |
