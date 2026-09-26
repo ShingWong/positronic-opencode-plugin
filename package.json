@@ -10,6 +10,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc && cp src/brains.py dist/brains.py 2>/dev/null || true && cp src/config.py dist/config.py 2>/dev/null || true",
+    "prepack": "npm run build",
     "test": "pytest tests/ -q && vitest run"
   },
   "dependencies": {

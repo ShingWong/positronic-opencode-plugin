@@ -1,0 +1,26 @@
+# PII firewall — adding .npmignore REPLACES the .gitignore fallback,
+# so the private-state patterns from .gitignore are repeated here
+# deliberately. Nothing from private brain state may ever ship.
+brain_henry/state/
+*.db
+.positronic/
+__pycache__/
+.pytest_cache/
+node_modules/
+*.log
+
+# package hygiene — ship runtime, source, user docs and license only
+tests/
+docs/superpowers/
+docs/.gitkeep
+.github/
+.githooks/
+.superpowers/
+AGENTS.md
+tsconfig.json
+vitest.config.ts
+pyproject.toml
+package-lock.json
+.gitignore
+*.tgz
+.npmrc
