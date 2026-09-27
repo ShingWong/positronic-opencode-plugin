@@ -53,7 +53,7 @@ positronic init --brain mail --profile long_term --embed local --json  # → {ok
 positronic init --brain kairos --profile archival --force --json        # overwrite existing
 
 positronic info --json
-# {"version":"0.1.0-beta.1","engram_tag":"v0.2.0","brains":{...},"tiers":{"lexical":"ok","bge":"down","llama":"ok","engram":"ok"}}
+# {"version":"0.1.0-beta.2","engram_tag":"v0.2.0","brains":{...},"tiers":{"lexical":"ok","bge":"down","llama":"ok","engram":"ok"}}
 
 positronic stats --json
 positronic stats --brain kairos --json
