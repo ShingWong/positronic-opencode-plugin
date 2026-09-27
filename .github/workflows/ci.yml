@@ -7,8 +7,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
+      # The python shim (src/config.py, src/brains.py) is exercised by pytest,
+      # so the runner needs a real Python plus memeng from the sibling repo.
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/checkout@v4
+        with:
+          repository: ShingWong/positronic-engram
+          path: positronic-engram
       - run: npm ci
       - run: npm run build
+      - run: python -m pip install --upgrade pip pytest
+      - run: pip install ./positronic-engram/engine
       - run: python -m pytest -q
       - run: npx vitest run
       - run: node dist/cli.js doctor --json || node dist/cli.js doctor
