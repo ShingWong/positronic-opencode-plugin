@@ -8,17 +8,19 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       # The python shim (src/config.py, src/brains.py) is exercised by pytest,
-      # so the runner needs a real Python plus memeng from the sibling repo.
+      # and the vitest suites shell out to `python3 -m positronic_ai`. So the
+      # runner needs Python plus positronic_ai, which carries memeng with it
+      # (its only dependency is memeng @ positronic-engram@v0.2.0).
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
       - uses: actions/checkout@v4
         with:
-          repository: ShingWong/positronic-engram
-          path: positronic-engram
+          repository: ShingWong/positronic-agent-interface
+          path: positronic-agent-interface
       - run: npm ci
       - run: npm run build
       - run: python -m pip install --upgrade pip pytest
-      - run: pip install ./positronic-engram/engine
+      - run: pip install ./positronic-agent-interface
       - run: python -m pytest -q
       - run: npx vitest run
       - run: node dist/cli.js doctor --json || node dist/cli.js doctor
