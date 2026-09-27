@@ -26,11 +26,20 @@
 
 Consumes positronic-engram engine/src/memeng (SQLiteStore, MemoryEngine, retention_profiles).
 """
+import importlib.util
 import sys
-
-sys.path.insert(0, "/usr/local/devel/positronic/positronic-engram/engine/src")
-
 from pathlib import Path
+
+# memeng lives in the sibling positronic-engram repo and is not a dependency of
+# this npm package. Prefer an installed copy. Only fall back to the sibling
+# checkout used by the workspace layout, and only when it really exists: an
+# unconditional insert at position 0 both does nothing useful off that
+# machine and silently shadows a correctly installed memeng.
+if importlib.util.find_spec("memeng") is None:
+    _SIBLING = Path(__file__).resolve().parents[2] / "positronic-engram" / "engine" / "src"
+    if (_SIBLING / "memeng").is_dir():
+        sys.path.insert(0, str(_SIBLING))
+
 import json
 
 from memeng.store import SQLiteStore

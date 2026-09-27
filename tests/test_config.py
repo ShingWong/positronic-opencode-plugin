@@ -22,6 +22,17 @@
 # along with this program. If not, see <https://gnu.org>.
 # =====================================================================
 
+import pytest
+
+# src.config -> src.brains, which resolves memeng (installed copy, else the
+# sibling positronic-engram checkout). Neither exists in a bare clone of this
+# package, so skip the module instead of erroring on the import.
+try:
+    import src.config  # noqa: F401
+except ImportError as _e:
+    pytest.skip(f"memeng unavailable: {_e}", allow_module_level=True)
+
+
 def test_config_roundtrip(tmp_path):
     from src.config import save_config, load_config  # will be python shim
     save_config(tmp_path, {"brains": {"kairos": {"profile": "balanced", "embed": "lexical"}}})
