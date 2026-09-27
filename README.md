@@ -271,7 +271,7 @@ Full reference: `docs/commands.md`.
 
 `positronic-engram` is the engine behind this plugin — polytemporal `time_vector`, τ, retention profiles, salience gating, tensor objects, deterministic recall.
 
-It's **AGPL-3.0-or-later OR Commercial** and ready to embed in your own agents.
+It's **AGPL-3.0-or-later OR LicenseRef-Commercial** and ready to embed in your own agents.
 
 Footprint: the SQLite core is **<50 MiB**.
 Serving embeddings + an LLM adds BGE-M3 (~0.6 GiB) and Qwen3 (~15 GiB).
@@ -284,4 +284,4 @@ Explore the full ecosystem:
 
 ## License
 
-AGPL-3.0-or-later OR Commercial — see `LICENSE`.
+AGPL-3.0-or-later OR LicenseRef-Commercial — see `LICENSE`.

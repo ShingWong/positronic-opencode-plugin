@@ -1,7 +1,7 @@
 {
   "name": "positronic-opencode-plugin",
   "version": "0.1.0-beta.1",
-  "license": "AGPL-3.0-or-later OR Commercial",
+  "license": "AGPL-3.0-or-later OR LicenseRef-Commercial",
   "author": "Shing Wong",
   "type": "module",
   "bin": {
