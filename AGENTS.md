@@ -5,8 +5,9 @@
 Each project has federated brains under `.positronic/brains/{name}/memory.db` + `.positronic/config.json`. Same `kairos_brain` API as `positronic-private/AGENTS.md:12`, but store paths point to `.positronic/brains/`:
 
 ```python
-import sys
-sys.path.insert(0, "/usr/local/devel/positronic/positronic-engram/engine/src")
+# memeng is a declared dependency (pip install -e positronic-engram/engine).
+# Do NOT add a sys.path shim: at position 0 it shadows the installed package
+# with whatever a sibling checkout happens to contain.
 from memeng.store import SQLiteStore
 from memeng.engine import MemoryEngine
 from pathlib import Path
@@ -111,7 +112,7 @@ pointing at one canonical entity). The engine preserves the family; the agent
 | `/positronic:init` | `positronic.init` | `positronic init [--brain <name>] [--force] --json` | no args → help; warns if exists, `--force` overwrites |
 | `/positronic:info` | `positronic.info` | `positronic info --json` | version + ENGRAM_TAG + brains + tiers |
 | `/positronic:stats` | `positronic.stats` | `positronic stats [--brain kairos] --json` | `{episodes}` per `.positronic/brains/*/memory.db` |
-| `/positronic:config` | `positronic.config` | `positronic config [profile archival --confirm] --json` | `E7 55/55/35/7` confirm gate; blocks `*.db` |
+| `/positronic:config` | `positronic.config` | `positronic config [profile archival --confirm] --json` | `E7 55/55/35/11` confirm gate; blocks `*.db` |
 | `/positronic:brain-test` | `positronic.brain-test` | `positronic brain-test --k 3 --json` | `{"positronic.brain-test":{"brain":"kairos","k":3,"json":true}}` |
 | `/positronic:query` | `positronic.query` | `positronic query "<text>" --k 8 --json` | FTS5+RRF text search; `--sql --anchors --objects --sightings` |
 | `/positronic:llm-stat` | `positronic.llm-stat` | `positronic llm-stat --json` | `bge/llama` tiers, pooling `cls` |
@@ -128,13 +129,27 @@ CLI parity: `dist/cli.js` delegates `positronic <verb>` → `python3 -m positron
 ## Pin & install
 
 ```bash
-export ENGRAM_TAG=v0.2.0
+export ENGRAM_TAG=v0.2.1
 git clone --depth 1 --branch $ENGRAM_TAG https://github.com/ShingWong/positronic-engram
 pip install -e positronic-engram/engine
 pip install -e /usr/local/devel/positronic/positronic-agent-interface   # PAI (positronic_ai)
-opencode plugin add github:ShingWong/positronic-opencode-plugin#beta
+bash install.sh                                       # writes a file:// plugin entry
 positronic init --embed lexical
 ```
+
+The plugin is installed by `install.sh`, which clones the repo and writes a
+`file://` entry pointing at that clone — **not** a `git+https://…#beta` URI.
+Verified against a live config on 2026-09-30:
+
+```jsonc
+// on this host; $PLUGIN_DIR is wherever install.sh cloned to
+"positronic-opencode-plugin": "positronic-opencode-plugin@file://$PLUGIN_DIR"
+```
+
+So the clone's checked-out branch is what actually runs. There is a `beta`
+branch on the remote, but nothing consumes it, and as of 2026-09-30 it sits 8
+commits *behind* `main`. Do not reason about what is installed from the branch
+name — read the config.
 
 The plugin requires the PAI package installed (`python3 -m positronic_ai`)
 to serve any verb. State lives at `.positronic/config.json` +
@@ -142,4 +157,4 @@ to serve any verb. State lives at `.positronic/config.json` +
 
 Store: `.positronic/brains/*/memory.db` (gitignored, never commit — see `.gitignore:1` PII firewall)
 
-Schema + semantics: `positronic-research/papers/temporal-perception-in-AI/25-polytemporal-schema.md` and `26-beyond-sql.md`. Retention profiles: `engine/src/memeng/engine.py:48` `balanced|archival|long_term|short_term` (E7 survival 55/55/35/7).
+Schema + semantics: `positronic-research/papers/temporal-perception-in-AI/25-polytemporal-schema.md` and `26-beyond-sql.md`. Retention profiles: `engine/src/memeng/engine.py:48` `balanced|archival|long_term|short_term` (E7 survival 55/55/35/11).
