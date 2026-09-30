@@ -76,10 +76,12 @@ jobs:
       # point of doing trusted publishing rather than just deleting a secret.
       #
       # To enable, the operator runs once, authenticated with 2FA:
-      #   npm trust github positronic-opencode-plugin \
+      #   npm trust github @positronic-ai/opencode-plugin \
       #     --file publish.yml \
       #     --repo ShingWong/positronic-opencode-plugin \
       #     --allow-publish --allow-stage-publish
+      # Note the split: --file and --repo name the WORKFLOW, the positional
+      # argument names the npm PACKAGE. They are not the same string.
       - name: Stage publish to npm
         run: >-
           npm stage publish --provenance --access public

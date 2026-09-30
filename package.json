@@ -1,5 +1,5 @@
 {
-  "name": "positronic-opencode-plugin",
+  "name": "@positronic-ai/opencode-plugin",
   "version": "0.1.0-beta.2",
   "license": "AGPL-3.0-or-later OR LicenseRef-Commercial",
   "homepage": "https://positronic-ai.us",
