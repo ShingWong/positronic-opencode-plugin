@@ -250,11 +250,17 @@ A fuller worked example (including subagent coverage and a plan-docs step) is in
 
 | Command | What it does |
 |---|---|
-| `positronic init` | create / configure a brain |
+| `positronic init` | create / configure a brain (`--from-db PATH` adopts a store) |
 | `positronic info` | show installed tiers |
 | `positronic stats` | episode counts + profiles |
 | `positronic config` | retention, embed tier, live ingestion |
-| `positronic query` | FTS5 + RRF retrieval (+ objects, anchors, sightings) |
+| `positronic query` | text, `--sql` (read-only), `--object` identity dossier, `--range` window, `--describe` store map (+ anchors, objects, sightings) |
+| `positronic ingest-log` | a log file into a brain under a validated schema |
+| `positronic prune` | prune a brain (`--axis tau\|wall`) |
+| `positronic recall` | fused recall across brains |
+| `positronic ask` | answer from brain memory |
+| `positronic consolidate` | consolidate episodes |
+| `positronic tag` | tag an episode (clean, spam, phishing, scam) |
 | `positronic brain-test` | probe recall latency |
 | `positronic llm-stat` | BGE / LLM tier health |
 | `positronic update` | pull the latest plugin + engine |
