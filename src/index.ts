@@ -130,6 +130,19 @@ export function ctxRoot(ctx: any): string | undefined {
 export function ctxProjectRoot(ctx: any): string | undefined {
   return asDir(ctx?.location) || asDir(ctx?.project) || undefined;
 }
+// Fix 12 — locations that are NOT a project even though the host names them:
+// the service's own setup arrives with location=$HOME (seen live: setup
+// location=/home/swong), a daemon runs from its own cwd, and a container dir
+// (/usr/local/devel) is always the parent of a project, never the project.
+// Those stay untrusted, so they cannot steal the root from a real project;
+// every other project location is claimable before its first init.
+export function isNoiseDir(d: string): boolean {
+  const home = process.env.HOME || os.homedir();
+  if (d === home || d === process.cwd()) return true;
+  const cur = __posProjectRoot;
+  if (cur && cur !== d && cur.startsWith(d + "/")) return true; // ancestor of the claimed project
+  return false;
+}
 // Fix 11 — explicit root for global installs on builds that pass no directory.
 // One absolute path per line at ~/.config/positronic/project.
 export function configRoot(): string | undefined {
@@ -824,7 +837,8 @@ export async function setupV2(ctx: any) {
   const hostRoot = envRoot || ctxRoot(ctx);
   const locRoot = ctxProjectRoot(ctx);
   setProjectRoot(hostRoot, {
-    trusted: Boolean(envRoot) || (locRoot !== undefined && hostRoot === locRoot),
+    trusted: Boolean(envRoot) ||
+      (locRoot !== undefined && hostRoot === locRoot && !isNoiseDir(locRoot)),
   });
   setPosClient(ctx && ctx.client);
   // Fix 11 diagnostics: beta builds may pass an empty ctx — surface exactly

@@ -576,6 +576,33 @@ describe("Fix 11 — explicit root + toolDir parity + sessionDir cache", () => {
       rmSync(proj, { recursive: true, force: true });
     }
   });
+
+  test("setupV2 ignores the service home and container locations (Fix 12)", async () => {
+    // Live: the service's own setup arrives with location=$HOME, and a
+    // container dir (/usr/local/devel) is the parent of a project. Neither is
+    // a project, so neither may claim the root from a real one.
+    (globalThis as any).__positronicV2Abort = undefined;
+    const f = fakeCtx();
+    const parent = mkdtempSync(join(tmpdir(), "pos-fix12-container-"));
+    const proj = join(parent, "proj");
+    mkdirSync(join(proj, ".positronic"), { recursive: true });
+    const home = mkdtempSync(join(tmpdir(), "pos-fix12-home-"));
+    const savedHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      await setupV2({ ...f.ctx, location: { directory: proj } });
+      expect(projectRoot()).toBe(proj);
+      await setupV2({ ...f.ctx, location: { directory: home } });
+      expect(projectRoot()).toBe(proj);
+      await setupV2({ ...f.ctx, location: { directory: parent } });
+      expect(projectRoot()).toBe(proj);
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      rmSync(parent, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Post-compaction brain-first reminder", () => {
