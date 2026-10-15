@@ -34,10 +34,10 @@ jobs:
       - name: Assert the staged-publish commands exist
         run: |
           set -euo pipefail
-          node -e 'const [a,b]=process.versions.node.split(".").map(Number); \
-                   if (!(a>22 || (a===22 && b>=22))) { \
-                     console.error(`Node ${process.versions.node} predates npm 12 (needs ^22.22.2)`); \
-                     process.exit(1); }'
+          # One physical line: a \ at end of line inside '...' is passed to
+          # node verbatim (bash only joins \-newline outside quotes), which
+          # made the old multi-line script die with "Expected unicode escape".
+          node -e 'const [a,b]=process.versions.node.split(".").map(Number); if (!(a>22 || (a===22 && b>=22))) { console.error("Node " + process.versions.node + " predates npm 12 (needs ^22.22.2)"); process.exit(1); }'
           npm stage --help >/dev/null 2>&1 || npm stage 2>&1 | grep -qi 'stage packages' \
             || { echo "::error::npm lacks 'stage' — trusted publishing cannot run"; exit 1; }
           echo "npm $(npm --version) on node $(node --version): stage publish available"
