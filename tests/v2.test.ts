@@ -501,6 +501,57 @@ describe("Fix 11 — explicit root + toolDir parity + sessionDir cache", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("setupV2 claims a fresh project root before .positronic/ exists (Fix 12)", async () => {
+    // Live bug: a new project's session sets up BEFORE its first `init`, so
+    // there is no .positronic/ yet. The guard rejected the real project, the
+    // root already claimed by some other project stayed, and every tool plus
+    // live ingestion kept running there (seen: ingest skipped, live=false,
+    // dir=<previous project>). ctx.location is the session's project — claim
+    // it even while the project is still empty.
+    (globalThis as any).__positronicV2Abort = undefined;
+    const f = fakeCtx();
+    const proj = mkdtempSync(join(tmpdir(), "pos-fix12-fresh-"));
+    try {
+      await setupV2({ ...f.ctx, location: { directory: proj, workspaceID: "ws" } });
+      expect(projectRoot()).toBe(proj);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("setupV2 still refuses an untrusted cwd root without .positronic/ (Fix 12)", async () => {
+    // The Fix 11 clobber guard must survive: ctx.directory alone (the daemon
+    // cwd in that bug) still needs .positronic/ to win over a real project.
+    (globalThis as any).__positronicV2Abort = undefined;
+    const f = fakeCtx();
+    const proj = mkdtempSync(join(tmpdir(), "pos-fix12-real-"));
+    const cwd = mkdtempSync(join(tmpdir(), "pos-fix12-cwd-"));
+    mkdirSync(join(proj, ".positronic"), { recursive: true });
+    try {
+      await setupV2({ ...f.ctx, directory: proj });
+      expect(projectRoot()).toBe(proj);
+      await setupV2({ ...f.ctx, directory: cwd });
+      expect(projectRoot()).toBe(proj);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("setupV2 trusts the env root even without .positronic/ (Fix 12)", async () => {
+    (globalThis as any).__positronicV2Abort = undefined;
+    const f = fakeCtx();
+    const proj = mkdtempSync(join(tmpdir(), "pos-fix12-env-"));
+    process.env.POSITRONIC_PROJECT_DIR = proj;
+    try {
+      await setupV2({ ...f.ctx });
+      expect(projectRoot()).toBe(proj);
+    } finally {
+      delete process.env.POSITRONIC_PROJECT_DIR;
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Post-compaction brain-first reminder", () => {

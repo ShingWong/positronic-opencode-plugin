@@ -87,7 +87,7 @@ export function asDir(v: any): string | undefined {
   }
   return undefined;
 }
-export function setProjectRoot(dir?: any): void {
+export function setProjectRoot(dir?: any, opts?: { trusted?: boolean }): void {
   const d = asDir(dir);
   if (!d) return;
   // Root guard — a multi-project service calls setup() once per project and
@@ -96,9 +96,20 @@ export function setProjectRoot(dir?: any): void {
   // ~/.positronic/brains/kairos/memory.db. Same rule as projectDir(): only
   // claim a dir that quacks like a project. Env/config roots re-read in
   // projectRoot() are unaffected by this guard.
+  //
+  // `trusted` is for roots the host asserts are the session's project —
+  // $POSITRONIC_PROJECT_DIR, or ctx.location/ctx.project, which opencode fills
+  // with the real project directory. A brand-new project has no .positronic/
+  // until the first `positronic init`, and rejecting it there is how a fresh
+  // project keeps whatever root claimed first: tools and live ingestion then
+  // land in another project's brain (seen live: a new project's session
+  // ingested into the previous project's root, skipped as live=false).
+  // Weaker sources (ctx.directory / ctx.worktree — the daemon cwd in that same
+  // bug) keep the .positronic/ requirement.
   let has = false;
   try { has = fs.statSync(path.join(d, ".positronic")).isDirectory(); } catch { has = false; }
-  if (has) {
+  if (has || opts?.trusted) {
+    if (!has) logIngest(`setProjectRoot: claiming fresh project ${d} (trusted, no .positronic/ yet)`);
     __posProjectRoot = d;
   } else {
     logIngest(`setProjectRoot: rejected ${d} (no .positronic/)`);
@@ -111,6 +122,13 @@ export function v2ResetProjectRoot(): void { __posProjectRoot = undefined; }
 export function ctxRoot(ctx: any): string | undefined {
   return asDir(ctx?.directory) || asDir(ctx?.worktree) ||
     asDir(ctx?.location) || asDir(ctx?.project) || undefined;
+}
+// Fix 12 — where the host says THIS session's project lives (PluginInput
+// .location / .project). ctxRoot() prefers directory/worktree, and those have
+// been the serve daemon's cwd; this one is only the project, so it can be
+// trusted even before .positronic/ exists (see setProjectRoot).
+export function ctxProjectRoot(ctx: any): string | undefined {
+  return asDir(ctx?.location) || asDir(ctx?.project) || undefined;
 }
 // Fix 11 — explicit root for global installs on builds that pass no directory.
 // One absolute path per line at ~/.config/positronic/project.
@@ -531,9 +549,15 @@ async function pluginFactory(_input: any) {
       },
       "positronic.llm-stat": {
         description: "bge/llama tier health",
-        args: {},
-        execute: async () => {
-          const r = pai(["llm-stat", "--json"]);
+        args: {
+          dir: z.string().optional().describe("project directory"),
+        },
+        // cwd matters: PAI reads `embed.local_url` from the project config in
+        // its cwd, so without it this probe health-checks whatever directory
+        // the service happens to run in — not this project's embedding server.
+        execute: async (args: any, ctx: any) => {
+          const dir = toolDir(args, ctx);
+          const r = pai(["llm-stat", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
       },
@@ -541,9 +565,11 @@ async function pluginFactory(_input: any) {
         description: "tier guide (606MB bge-m3)",
         args: {
           tier: z.string().optional().describe("tier 1|2|3"),
+          dir: z.string().optional().describe("project directory"),
         },
-        execute: async (args: any) => {
-          const r = pai(["llm-setup", "--tier", args?.tier || "3", "--json"]);
+        execute: async (args: any, ctx: any) => {
+          const dir = toolDir(args, ctx);
+          const r = pai(["llm-setup", "--tier", args?.tier || "3", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
       },
@@ -782,11 +808,15 @@ export async function handleV2Event(ev: any) {
 export async function setupV2(ctx: any) {
   // Fix 10 — PluginInput.directory/worktree is authoritative; env wins if set.
   // asDir: worktree may arrive as an object — only strings stick.
-  setProjectRoot(
-    process.env.POSITRONIC_PROJECT_DIR ||
-    ctxRoot(ctx) ||
-    undefined,
-  );
+  // Fix 12 — the session's project location is trusted (claimable before the
+  // project has been `positronic init`ed); directory/worktree are not, because
+  // a multi-project service has passed its own cwd there.
+  const envRoot = process.env.POSITRONIC_PROJECT_DIR;
+  const hostRoot = envRoot || ctxRoot(ctx);
+  const locRoot = ctxProjectRoot(ctx);
+  setProjectRoot(hostRoot, {
+    trusted: Boolean(envRoot) || (locRoot !== undefined && hostRoot === locRoot),
+  });
   setPosClient(ctx && ctx.client);
   // Fix 11 diagnostics: beta builds may pass an empty ctx — surface exactly
   // what is available so the global-install root question is answerable.
