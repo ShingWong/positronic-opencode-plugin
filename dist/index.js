@@ -100,7 +100,7 @@ export function asDir(v) {
     }
     return undefined;
 }
-export function setProjectRoot(dir) {
+export function setProjectRoot(dir, opts) {
     const d = asDir(dir);
     if (!d)
         return;
@@ -110,6 +110,16 @@ export function setProjectRoot(dir) {
     // ~/.positronic/brains/kairos/memory.db. Same rule as projectDir(): only
     // claim a dir that quacks like a project. Env/config roots re-read in
     // projectRoot() are unaffected by this guard.
+    //
+    // `trusted` is for roots the host asserts are the session's project —
+    // $POSITRONIC_PROJECT_DIR, or ctx.location/ctx.project, which opencode fills
+    // with the real project directory. A brand-new project has no .positronic/
+    // until the first `positronic init`, and rejecting it there is how a fresh
+    // project keeps whatever root claimed first: tools and live ingestion then
+    // land in another project's brain (seen live: a new project's session
+    // ingested into the previous project's root, skipped as live=false).
+    // Weaker sources (ctx.directory / ctx.worktree — the daemon cwd in that same
+    // bug) keep the .positronic/ requirement.
     let has = false;
     try {
         has = fs.statSync(path.join(d, ".positronic")).isDirectory();
@@ -117,7 +127,9 @@ export function setProjectRoot(dir) {
     catch {
         has = false;
     }
-    if (has) {
+    if (has || opts?.trusted) {
+        if (!has)
+            logIngest(`setProjectRoot: claiming fresh project ${d} (trusted, no .positronic/ yet)`);
         __posProjectRoot = d;
     }
     else {
@@ -131,6 +143,13 @@ export function v2ResetProjectRoot() { __posProjectRoot = undefined; }
 export function ctxRoot(ctx) {
     return asDir(ctx?.directory) || asDir(ctx?.worktree) ||
         asDir(ctx?.location) || asDir(ctx?.project) || undefined;
+}
+// Fix 12 — where the host says THIS session's project lives (PluginInput
+// .location / .project). ctxRoot() prefers directory/worktree, and those have
+// been the serve daemon's cwd; this one is only the project, so it can be
+// trusted even before .positronic/ exists (see setProjectRoot).
+export function ctxProjectRoot(ctx) {
+    return asDir(ctx?.location) || asDir(ctx?.project) || undefined;
 }
 // Fix 11 — explicit root for global installs on builds that pass no directory.
 // One absolute path per line at ~/.config/positronic/project.
@@ -611,9 +630,15 @@ async function pluginFactory(_input) {
             },
             "positronic.llm-stat": {
                 description: "bge/llama tier health",
-                args: {},
-                execute: async () => {
-                    const r = pai(["llm-stat", "--json"]);
+                args: {
+                    dir: z.string().optional().describe("project directory"),
+                },
+                // cwd matters: PAI reads `embed.local_url` from the project config in
+                // its cwd, so without it this probe health-checks whatever directory
+                // the service happens to run in — not this project's embedding server.
+                execute: async (args, ctx) => {
+                    const dir = toolDir(args, ctx);
+                    const r = pai(["llm-stat", "--json"], { cwd: dir });
                     return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
@@ -621,9 +646,11 @@ async function pluginFactory(_input) {
                 description: "tier guide (606MB bge-m3)",
                 args: {
                     tier: z.string().optional().describe("tier 1|2|3"),
+                    dir: z.string().optional().describe("project directory"),
                 },
-                execute: async (args) => {
-                    const r = pai(["llm-setup", "--tier", args?.tier || "3", "--json"]);
+                execute: async (args, ctx) => {
+                    const dir = toolDir(args, ctx);
+                    const r = pai(["llm-setup", "--tier", args?.tier || "3", "--json"], { cwd: dir });
                     return JSON.stringify(r.ok ? r.json : { error: r.error });
                 },
             },
@@ -853,16 +880,25 @@ export async function handleV2Event(ev) {
         if (!t)
             return;
         const props = (ev && (ev.data !== undefined ? ev.data : (ev.properties !== undefined ? ev.properties : ev))) || {};
+        // Fix 13 — every event carries the project it belongs to: the envelope
+        // has `location.directory` (and session events repeat it in data.location).
+        // A multi-project service re-claims the global projectRoot() whenever any
+        // other project sets up, so falling back to it ingests this session's
+        // messages into whichever project set up last (seen live: a sure-mail
+        // session ingested into /usr/local/devel/pentest, skipped as live=false).
+        // The event's own location wins over the shared root; without it this is
+        // unchanged.
+        const evDir = asDir(ev && ev.location) || asDir(v2get(props, ["location"]));
         const cwd = process.cwd();
         // --- stable v2 vocabulary: session.* events (only vocabulary on 2.0.2+ service) ---
         if (t === "session.text.ended") {
             const txt = typeof props.text === "string" ? props.text : "";
-            const d = (await sessionDir(props.sessionID)) || props.directory || projectRoot() || projectDir() || cwd;
+            const d = props.directory || evDir || (await sessionDir(props.sessionID)) || projectRoot() || projectDir() || cwd;
             await ingestAssistantOnce(txt, d, t);
             return;
         }
         if (t === "session.compacted" || t === "session.compaction.ended") {
-            const cdir = props.directory || projectRoot() || projectDir() || cwd;
+            const cdir = props.directory || evDir || projectRoot() || projectDir() || cwd;
             const sessionID = props.sessionID || v2get(props, ["session", "id"], ["id"]) || "";
             markCompacted(String(sessionID));
             void compactBrain(cdir, String(sessionID));
@@ -871,7 +907,7 @@ export async function handleV2Event(ev) {
         if (t === "session.execution.succeeded")
             return; // terminal noise, nothing to do
         if (t === "session.created") {
-            const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || projectRoot() || projectDir() || cwd;
+            const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || evDir || projectRoot() || projectDir() || cwd;
             const probe = pai(["info", "--json"], { cwd: dir });
             logIngest("v2 session.created info probe dir=" + dir + " ok=" + probe.ok);
             return;
@@ -890,7 +926,7 @@ export async function handleV2Event(ev) {
                 parts.push(delta);
             if (parts.length === 0)
                 return;
-            await ingestAssistantOnce(parts.join("\n"), v2get(props, ["directory"], ["session", "directory"]) || projectRoot() || projectDir() || cwd, t);
+            await ingestAssistantOnce(parts.join("\n"), v2get(props, ["directory"], ["session", "directory"]) || evDir || projectRoot() || projectDir() || cwd, t);
             return;
         }
         return;
@@ -902,9 +938,15 @@ export async function handleV2Event(ev) {
 export async function setupV2(ctx) {
     // Fix 10 — PluginInput.directory/worktree is authoritative; env wins if set.
     // asDir: worktree may arrive as an object — only strings stick.
-    setProjectRoot(process.env.POSITRONIC_PROJECT_DIR ||
-        ctxRoot(ctx) ||
-        undefined);
+    // Fix 12 — the session's project location is trusted (claimable before the
+    // project has been `positronic init`ed); directory/worktree are not, because
+    // a multi-project service has passed its own cwd there.
+    const envRoot = process.env.POSITRONIC_PROJECT_DIR;
+    const hostRoot = envRoot || ctxRoot(ctx);
+    const locRoot = ctxProjectRoot(ctx);
+    setProjectRoot(hostRoot, {
+        trusted: Boolean(envRoot) || (locRoot !== undefined && hostRoot === locRoot),
+    });
     setPosClient(ctx && ctx.client);
     // Fix 11 diagnostics: beta builds may pass an empty ctx — surface exactly
     // what is available so the global-install root question is answerable.
