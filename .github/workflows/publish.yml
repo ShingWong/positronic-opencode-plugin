@@ -22,8 +22,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: 'https://registry.npmjs.org'
-          package-manager-cache: false
+          # NO registry-url: it writes //registry.npmjs.org/:_authToken into
+          # .npmrc, and npm sends that token instead of doing the OIDC
+          # exchange — v0.1.2 signed its provenance fine and then died with
+          # E401 "authentication token seems to be invalid". Trusted publishing
+          # authenticates through id-token, so npm must find no token at all.
+          # (Also dropped package-manager-cache: not a setup-node@v4 input; the
+          # dependency cache was never enabled anyway, since `cache` is unset.)
 
       # `npm trust` and `npm stage` are npm 11+ commands. Node 22 ships an
       # older bundled npm, so upgrade explicitly rather than depending on which
@@ -59,8 +64,17 @@ jobs:
       - run: npx vitest run
 
       # ref_name is the pushed tag, because the trigger only fires on tags.
+      # Idempotent: re-running a tag after moving it must not fail on
+      # "release already exists".
       - name: Create GitHub release
-        run: gh release create "${{ github.ref_name }}" --generate-notes
+        run: |
+          set -euo pipefail
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "release ${{ github.ref_name }} already exists — updating notes"
+            gh release edit "${{ github.ref_name }}" --generate-notes
+          else
+            gh release create "${{ github.ref_name }}" --generate-notes
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
