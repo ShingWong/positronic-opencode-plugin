@@ -37,7 +37,7 @@ positronic init --brain research --profile archival --embed remote --force --jso
 | `/positronic:stats` | `positronic.stats` | `positronic stats` | `[--brain <name>] [--json]` | `{brains:{<name>:{episodes}}}`; no arg = all `.positronic/brains/*` |
 | `/positronic:config` | `positronic.config` | `positronic config` | `[<key> [<value>] [--brain <name>] [--confirm] [--show-secrets] [--json]]` | get: masked config; set: `{changed, before, after, warning?}`; `profile=archival` requires `--confirm`/`confirm:true` (E7 55/55/35/7); blocks `*.db` |
 | `/positronic:brain-test` | `positronic.brain-test` | `positronic brain-test` | `[--brain kairos] [--k 3] [--json]` | `{ok, hits, encode_ms, recall_ms, fallback, rrf_score}` probe `positronic:probe` |
-| `/positronic:llm-stat` | `positronic.llm-stat` | `positronic llm-stat` | `[--json]` | `{bge, llama, lexical, engram, pooling:cls|unknown}` (:8090 health, `bge-m3-Q8_0.gguf` dim 1024, pooling `cls` warning) |
+| `/positronic:llm-stat` | `positronic.llm-stat` | `positronic llm-stat` | `[--json]` | `{bge, llama, lexical, engram, pooling:cls|unknown}` (health at the project's `embed.local_url`, `POSITRONIC_BGE_URL` overrides/`off` skips, localhost `:8090` only with no config; `bge-m3-Q8_0.gguf` dim 1024, pooling `cls` warning) |
 | `/positronic:llm-setup` | `positronic.llm-setup` | `positronic llm-setup` | `[--tier 1|2|3] [--json]` | `{tier, guide}` + human slice of `docs/llama.md` (Tier 3: `606MB bge-m3-Q8_0.gguf` + `bge-embed.service Restart=always`, no auto-build) |
 | `/positronic:update` | `positronic.update` | `positronic update` | `[--check] [--status <jobId>] [--tail N] [--pin v0.2.x] [--json]` | `--check:{behind,engramTagDiff,npmOutdated}` dry `git ls-remote`; default spawns `~/.cache/positronic/update-<jobId>.log`, returns `{jobId,status,logPath}`; `--status/--tail` polls log |
 | `/positronic:delete` | `positronic.delete` | `positronic delete --brain <name>` | `[--brain <name>] --force` | wipes the brain + `memory.db`; refuses without `--force` |
@@ -117,7 +117,7 @@ positronic update --tail 50 --json         # {"logTail":[...]}
 
 ## Notes
 
-- **Project root resolution (Fix 10, Fix 11).** Live ingestion needs the
+- **Project root resolution (Fix 10–13).** Live ingestion needs the
   *project* dir, and opencode does not put it on v2 `session.*` events. On some
   beta builds (`v0.0.0-beta-17823`) `setup(ctx).directory`/`project` are
   **undefined**, `ctx.worktree` is an **API object** (`list|create|remove|…`,
@@ -140,6 +140,25 @@ positronic update --tail 50 --json         # {"logTail":[...]}
     `POSITRONIC_PROJECT_DIR=/path/to/project`, or write the path to
     `~/.config/positronic/project`. On beta-17823 the `ctx.location.directory`
     fallback usually suffices when the daemon runs in the project.
+  - **The session's own location is claimed (Fix 12).** `setup` reads
+    `ctx.location.directory` / `.project` (`ctxProjectRoot()`) and trusts it
+    **before** the project has been `positronic init`ed, so a fresh session's
+    first `init` lands in the right brain. `directory`/`worktree` are not
+    trusted the same way — a shared serve daemon passes its own cwd there —
+    and noise never wins: `isNoiseDir()` rejects `$HOME`, the daemon's cwd,
+    and an ancestor of an already-claimed project (seen live: `setup
+    location=/home/swong`), so none can steal the root from a real project.
+  - **Ingest routes on the event's own location (Fix 13).** Every v2 event
+    carries `location.directory` (envelope; session events repeat it in
+    `data.location`), and that dir wins over the shared `projectRoot()`. The
+    shared root is re-claimed whenever *another* project sets up, which used
+    to send each session's messages to whichever project set up last (seen
+    live: a sure-mail session ingesting into `/usr/local/devel/pentest`,
+    dropped there as `live=false`). No event location → the chain above,
+    unchanged.
+  - `positronic.llm-stat` / `llm-setup` spawn PAI with `cwd: toolDir()`, so
+    the bge probe reads **this** project's `embed.local_url` instead of
+    health-checking whatever directory the service happens to run in.
 - Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (12 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
 - 2.x: same verbs via `setup` + `ctx.tool.transform`, underscore names (`positronic_info` — core normalizes dots, accepted as-is). Verified live on 2.0.2: tools register, one `message.updated` → one episode, re-fires deduped, `recall` returns it verbatim.
 - CLI `dist/cli.js` dispatches `positronic <verb>` → same `run` (parity `--tail/--check/--status`).

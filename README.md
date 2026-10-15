@@ -182,9 +182,15 @@ curl -fsSL https://raw.githubusercontent.com/ShingWong/positronic-opencode-plugi
 
 Global installs load the plugin from opencode's config instead of
 `<project>/.opencode/plugins/`, so the *project* dir can't be derived from the
-plugin file path. The plugin resolves it from `POSITRONIC_PROJECT_DIR` /
-`PluginInput`, falling back to `cwd`. If you run a shared `opencode serve`
-daemon from `$HOME` — or your build passes no directory at all — set one of:
+plugin file path. The plugin claims each session's own `location.directory` as
+the project root — trusted even *before* `positronic init`, with `$HOME` and
+the daemon's own cwd ignored as noise — and routes every ingested event by its
+own `location.directory`, so one shared daemon serving several projects writes
+each session into **its** brain. Resolution order:
+`POSITRONIC_PROJECT_DIR` / `PluginInput` → `location`/`.project` →
+`~/.config/positronic/project` → plugin file location → `cwd`. If you run a
+shared `opencode serve` daemon from `$HOME` — or your build passes no
+directory at all — set one of:
 
 ```bash
 POSITRONIC_PROJECT_DIR=/path/to/project opencode serve    # env
