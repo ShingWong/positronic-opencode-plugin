@@ -255,6 +255,30 @@ describe("handleV2Event ingestion", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test("session.text.ended prefers the event envelope location over the shared root (Fix 13)", async () => {
+    // A multi-project service re-claims projectRoot() whenever another project
+    // sets up, so an event without its own directory would ingest this turn
+    // into whichever project set up last. The envelope carries the project.
+    const text = `${tag} envelope location steers the ingest project`;
+    await handleV2Event({
+      type: "session.text.ended",
+      location: { directory: dir, workspaceID: "ws" },
+      data: { sessionID: "s1", text },
+    });
+    expect(recallCount(dir, tag)).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("session.text.ended accepts location inside data (session events repeat it)", async () => {
+    const text = `${tag} data location steers the ingest project`;
+    await handleV2Event({
+      type: "session.text.ended",
+      data: { sessionID: "s1", text, location: { directory: dir } },
+    });
+    expect(recallCount(dir, tag)).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   test("message.updated + session.text.ended for the same turn encode once", async () => {
     const text = `${tag} lighthouse keepers file tide reports`;
     await handleV2Event(msgEvent(dir, "assistant", text));

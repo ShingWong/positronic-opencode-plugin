@@ -761,16 +761,25 @@ export async function handleV2Event(ev: any) {
     const t = ev && ev.type;
     if (!t) return;
     const props = (ev && (ev.data !== undefined ? ev.data : (ev.properties !== undefined ? ev.properties : ev))) || {};
+    // Fix 13 — every event carries the project it belongs to: the envelope
+    // has `location.directory` (and session events repeat it in data.location).
+    // A multi-project service re-claims the global projectRoot() whenever any
+    // other project sets up, so falling back to it ingests this session's
+    // messages into whichever project set up last (seen live: a sure-mail
+    // session ingested into /usr/local/devel/pentest, skipped as live=false).
+    // The event's own location wins over the shared root; without it this is
+    // unchanged.
+    const evDir = asDir(ev && ev.location) || asDir(v2get(props, ["location"]));
     const cwd = process.cwd();
     // --- stable v2 vocabulary: session.* events (only vocabulary on 2.0.2+ service) ---
     if (t === "session.text.ended") {
       const txt = typeof props.text === "string" ? props.text : "";
-      const d = (await sessionDir(props.sessionID)) || props.directory || projectRoot() || projectDir() || cwd;
+      const d = props.directory || evDir || (await sessionDir(props.sessionID)) || projectRoot() || projectDir() || cwd;
       await ingestAssistantOnce(txt, d, t);
       return;
     }
     if (t === "session.compacted" || t === "session.compaction.ended") {
-      const cdir = props.directory || projectRoot() || projectDir() || cwd;
+      const cdir = props.directory || evDir || projectRoot() || projectDir() || cwd;
       const sessionID = props.sessionID || v2get(props, ["session", "id"], ["id"]) || "";
       markCompacted(String(sessionID));
       void compactBrain(cdir, String(sessionID));
@@ -778,7 +787,7 @@ export async function handleV2Event(ev: any) {
     }
     if (t === "session.execution.succeeded") return; // terminal noise, nothing to do
     if (t === "session.created") {
-      const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || projectRoot() || projectDir() || cwd;
+      const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || evDir || projectRoot() || projectDir() || cwd;
       const probe = pai(["info", "--json"], { cwd: dir });
       logIngest("v2 session.created info probe dir=" + dir + " ok=" + probe.ok);
       return;
@@ -796,7 +805,7 @@ export async function handleV2Event(ev: any) {
       if (parts.length === 0) return;
       await ingestAssistantOnce(
         parts.join("\n"),
-        v2get(props, ["directory"], ["session", "directory"]) || projectRoot() || projectDir() || cwd,
+        v2get(props, ["directory"], ["session", "directory"]) || evDir || projectRoot() || projectDir() || cwd,
         t,
       );
       return;
