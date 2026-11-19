@@ -16,6 +16,12 @@
     "positronic": "dist/cli.js"
   },
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./server": "./dist/index.js",
+    "./tui": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "tsc && cp src/brains.py dist/brains.py 2>/dev/null || true && cp src/config.py dist/config.py 2>/dev/null || true",
     "prepack": "npm run build",
