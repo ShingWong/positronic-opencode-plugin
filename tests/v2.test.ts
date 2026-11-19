@@ -52,6 +52,8 @@ import plugin, {
   setPosClient,
   v2ResetSessionDirs,
   toolDir,
+  resolveToolDir,
+  ctxSessionID,
   asDir,
 } from "../src/index.js";
 
@@ -82,6 +84,10 @@ function fakeCtx(opts?: { commands?: boolean; commandAdd?: boolean }) {
 
 function seed(dir: string) {
   execSync(`python3 -m positronic_ai init --brain kairos --profile balanced --embed lexical`, { cwd: dir, stdio: "ignore" });
+}
+
+function seedBrain(dir: string, name: string) {
+  execSync(`python3 -m positronic_ai init --brain ${name} --profile balanced --embed lexical`, { cwd: dir, stdio: "ignore" });
 }
 
 function recallCount(dir: string, cue: string): number {
@@ -601,6 +607,131 @@ describe("Fix 11 — explicit root + toolDir parity + sessionDir cache", () => {
       else process.env.HOME = savedHome;
       rmSync(parent, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+// Fix 14 — issue #1: a shared serve daemon runs setup() once per project, but
+// __posProjectRoot is one global slot (last setup wins). Tool calls must resolve
+// their directory from the calling session, exactly like live ingestion does.
+describe("Fix 14 — tool calls resolve per session, not from one global root", () => {
+  const savedEnv = process.env.POSITRONIC_PROJECT_DIR;
+  const savedHome = process.env.HOME;
+
+  beforeEach(() => {
+    v2ResetProjectRoot();
+    v2ResetSessionDirs();
+    delete process.env.POSITRONIC_PROJECT_DIR;
+  });
+
+  afterAll(() => {
+    v2ResetProjectRoot();
+    v2ResetSessionDirs();
+    if (savedEnv === undefined) delete process.env.POSITRONIC_PROJECT_DIR;
+    else process.env.POSITRONIC_PROJECT_DIR = savedEnv;
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  });
+
+  test("an explicit args.dir still wins over the session lookup", async () => {
+    setPosClient({ session: { get: async () => ({ data: { directory: "/proj/session" } }) } });
+    expect(await resolveToolDir({ dir: "/proj/explicit" }, { sessionID: "s1" })).toBe("/proj/explicit");
+  });
+
+  test("the session's own project beats the global root in a multi-project daemon", async () => {
+    const a = mkdtempSync(join(tmpdir(), "pos-fix14-a-"));
+    const b = mkdtempSync(join(tmpdir(), "pos-fix14-b-"));
+    setPosClient({
+      session: {
+        get: async ({ path: p }: any) => ({ data: { directory: p.id === "sa" ? a : b } }),
+      },
+    });
+    // The second project's setup claimed the one global slot: the live bug.
+    setProjectRoot(b, { trusted: true });
+    expect(projectRoot()).toBe(b);
+    expect(await resolveToolDir({}, { sessionID: "sa" })).toBe(a);
+    expect(await resolveToolDir({}, { sessionID: "sb" })).toBe(b);
+    rmSync(a, { recursive: true, force: true });
+    rmSync(b, { recursive: true, force: true });
+  });
+
+  test("a brainless session does not borrow another project's root", async () => {
+    const b = mkdtempSync(join(tmpdir(), "pos-fix14-b2-"));
+    const empty = mkdtempSync(join(tmpdir(), "pos-fix14-empty-"));
+    setPosClient({ session: { get: async () => ({ data: { directory: empty } }) } });
+    setProjectRoot(b, { trusted: true });
+    expect(await resolveToolDir({}, { sessionID: "s-empty" })).toBe(empty);
+    rmSync(b, { recursive: true, force: true });
+    rmSync(empty, { recursive: true, force: true });
+  });
+
+  test("without a client, the call's own location beats the global root", async () => {
+    setProjectRoot("/proj/global", { trusted: true });
+    expect(await resolveToolDir({}, { location: { path: "/proj/call" } })).toBe("/proj/call");
+    expect(await resolveToolDir({}, { project: { root: "/proj/call2" } })).toBe("/proj/call2");
+  });
+
+  test("sessionDir speaks both host shapes (client and v2.3 session domain)", async () => {
+    setPosClient({ session: { get: async () => ({ data: { directory: "/proj/v1" } }) } });
+    expect(await sessionDir("v1")).toBe("/proj/v1");
+    v2ResetSessionDirs();
+    setPosClient({ get: async ({ sessionID }: any) => ({ location: { directory: `/proj/${sessionID}` } }) });
+    expect(await sessionDir("v2")).toBe("/proj/v2");
+  });
+
+  test("setupV2 wires ctx.session when ctx.client is absent (v2.3+ shape)", async () => {
+    (globalThis as any).__positronicV2Abort = undefined;
+    const a = mkdtempSync(join(tmpdir(), "pos-fix14-dom-"));
+    seedBrain(a, "gamma");
+    try {
+      const f = fakeCtx();
+      await setupV2({
+        ...f.ctx,
+        session: { get: async ({ sessionID }: any) => ({ location: { directory: sessionID === "sa" ? a : "/elsewhere" } }) },
+      });
+      expect(await resolveToolDir({}, { sessionID: "sa" })).toBe(a);
+      const byName = Object.fromEntries(f.added.map((t: any) => [t.name, t]));
+      const info = await byName["positronic.info"].execute({}, { sessionID: "sa" });
+      expect(Object.keys(JSON.parse(info.content[0].text).brains || {})).toEqual(["gamma"]);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+    }
+  });
+
+  test("ctxSessionID reads the shapes tool contexts actually use", () => {
+    expect(ctxSessionID({ sessionID: "s1" })).toBe("s1");
+    expect(ctxSessionID({ sessionId: "s2" })).toBe("s2");
+    expect(ctxSessionID({ session: { id: "s3" } })).toBe("s3");
+    expect(ctxSessionID({ session: { sessionID: "s4" } })).toBe("s4");
+    expect(ctxSessionID({})).toBeUndefined();
+  });
+
+  test("registered tools answer from the session's project (issue #1 regression)", async () => {
+    (globalThis as any).__positronicV2Abort = undefined;
+    const a = mkdtempSync(join(tmpdir(), "pos-fix14-tool-a-"));
+    const b = mkdtempSync(join(tmpdir(), "pos-fix14-tool-b-"));
+    seedBrain(a, "alpha");
+    seedBrain(b, "beta");
+    const client = {
+      session: {
+        get: async ({ path: p }: any) => ({ data: { directory: p.id === "sa" ? a : b } }),
+      },
+    };
+    try {
+      const f = fakeCtx();
+      await setupV2({ ...f.ctx, client, location: { directory: a } });
+      await setupV2({ ...f.ctx, client, location: { directory: b } });
+      expect(projectRoot()).toBe(b);
+      const byName = Object.fromEntries(f.added.map((t: any) => [t.name, t]));
+      const infoA = await byName["positronic.info"].execute({}, { sessionID: "sa" });
+      const infoB = await byName["positronic.info"].execute({}, { sessionID: "sb" });
+      const brainsA = Object.keys(JSON.parse(infoA.content[0].text).brains || {});
+      const brainsB = Object.keys(JSON.parse(infoB.content[0].text).brains || {});
+      expect(brainsA).toEqual(["alpha"]);
+      expect(brainsB).toEqual(["beta"]);
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
     }
   });
 });

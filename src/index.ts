@@ -175,29 +175,78 @@ export function v2ResetSessionDirs(): void {
   __posSessionDirNoClientLogged = false;
   __posClient = undefined;
 }
+// Fix 14 — the same lookup must work on both host shapes: the 1.18/early-v2
+// client (`client.session.get({ path: { id } })` → `{ data: { directory } }`)
+// and the v2.3+ plugin context, which exposes the session domain directly
+// (`ctx.session.get({ sessionID })` → SessionInfo with `location.directory`).
+function sessionGetter(): { fn: any; thisArg: any; style: "client" | "domain" } | undefined {
+  const c = __posClient;
+  const s = c?.session;
+  if (s && typeof s.get === "function") return { fn: s.get, thisArg: s, style: "client" };
+  if (c && typeof c.get === "function") return { fn: c.get, thisArg: c, style: "domain" };
+  return undefined;
+}
+function sessionInfoDir(r: any): string | undefined {
+  return asDir(r?.data?.directory) || asDir(r?.directory) ||
+    asDir(r?.data?.location) || asDir(r?.location) || undefined;
+}
 export async function sessionDir(id?: string): Promise<string | undefined> {
   if (!id) return undefined;
   const cached = __posSessionDirs.get(id);
   if (cached) return cached;
-  if (!__posClient) {
+  const g = sessionGetter();
+  if (!g) {
     if (!__posSessionDirNoClientLogged) {
       __posSessionDirNoClientLogged = true;
       logIngest("sessionDir: no client");
     }
     return undefined;
   }
-  try {
-    const r: any = await __posClient?.session?.get?.({ path: { id } });
-    const d = r?.data?.directory || r?.directory || undefined;
-    if (d) {
-      if (__posSessionDirs.size > 5000) __posSessionDirs.clear();
-      __posSessionDirs.set(id, d);
-    }
-    return d;
-  } catch { return undefined; }
+  // Pick the shape the host's API takes, then try progressively simpler forms.
+  // session.get is read-only, so probing is safe.
+  const args: any[] = g.style === "client"
+    ? [{ path: { id } }, { id }, id]
+    : [{ sessionID: id }, { id }, id];
+  for (const arg of args) {
+    try {
+      const r: any = await g.fn.call(g.thisArg, arg);
+      const d = sessionInfoDir(r);
+      if (d) {
+        if (__posSessionDirs.size > 5000) __posSessionDirs.clear();
+        __posSessionDirs.set(id, d);
+        return d;
+      }
+    } catch {}
+  }
+  return undefined;
 }
 export function toolDir(args: any, ctx: any): string {
-  return args?.dir || ctx?.directory || projectRoot() || projectDir() || process.cwd();
+  return asDir(args?.dir) || ctxProjectRoot(ctx) ||
+    asDir(ctx?.directory) || asDir(ctx?.worktree) ||
+    projectRoot() || projectDir() || process.cwd();
+}
+// Fix 14 — tool calls resolve their directory PER SESSION. A shared serve
+// daemon calls setup() once per project, but __posProjectRoot is one global
+// slot: the last setup wins, so a synchronous toolDir() could send project A's
+// call into project B's brain (live report: sun-portal's brain returned from a
+// sure-state session). sessionDir() is the same per-session lookup live
+// ingestion already uses. Order: explicit args.dir, the session's own project
+// dir, the call's trusted project location, its directory/worktree, then the
+// single-project global fallbacks (env/config/file-location/cwd).
+export function ctxSessionID(ctx: any): string | undefined {
+  const s = (v: any) => (typeof v === "string" && v ? v : undefined);
+  return s(ctx?.sessionID) || s(ctx?.sessionId) ||
+    s(ctx?.session?.id) || s(ctx?.session?.sessionID) ||
+    s(ctx?.info?.sessionID) || undefined;
+}
+export async function resolveToolDir(args: any, ctx: any): Promise<string> {
+  const explicit = asDir(args?.dir);
+  if (explicit) return explicit;
+  const perSession = await sessionDir(ctxSessionID(ctx));
+  if (perSession) return perSession;
+  return ctxProjectRoot(ctx) ||
+    asDir(ctx?.directory) || asDir(ctx?.worktree) ||
+    projectRoot() || projectDir() || process.cwd();
 }
 function pai(argv: string[], opts?: { cwd?: string; timeout?: number }): { ok: boolean; json: any; error?: string } {
   try {
@@ -406,14 +455,17 @@ async function pluginFactory(_input: any) {
       if (!t) return;
       logIngest(`event type=${t} dir=${process.cwd()}`);
       if (t === "session.created") {
-        const dir = (event as any)?.properties?.directory || (event as any)?.directory || projectRoot() || projectDir() || process.cwd();
+        const dir = (event as any)?.properties?.directory || (event as any)?.directory ||
+          (await sessionDir((event as any)?.properties?.sessionID || (event as any)?.sessionID)) ||
+          projectRoot() || projectDir() || process.cwd();
         const probe = pai(["info", "--json"], { cwd: dir });
         logIngest(`session.created info probe dir=${dir} ok=${probe.ok}`);
         return;
       }
       if (t === "session.compacted" || t === "session.compaction.ended") {
-        const dir = (event as any)?.properties?.info?.directory || (event as any)?.properties?.directory || (event as any)?.directory || projectRoot() || projectDir() || process.cwd();
         const sessionID = (event as any)?.properties?.sessionID || "";
+        const dir = (event as any)?.properties?.info?.directory || (event as any)?.properties?.directory || (event as any)?.directory ||
+          (await sessionDir(sessionID)) || projectRoot() || projectDir() || process.cwd();
         void compactBrain(dir, sessionID);
         return;
       }
@@ -452,7 +504,7 @@ async function pluginFactory(_input: any) {
           brains: z.array(z.object({ name: z.string(), profile: z.string(), embed: z.string() })).optional().describe("explicit brains array (advanced)"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           let brains = args?.brains;
           if ((!brains || (Array.isArray(brains) && brains.length === 0)) && (args?.brain || args?.profile || args?.embed)) {
             brains = [{ name: args.brain || "postronic", profile: args.profile || "balanced", embed: args.embed || "lexical" }];
@@ -479,7 +531,7 @@ async function pluginFactory(_input: any) {
           k: z.number().optional().describe("top-k"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const r = pai(["recall", args?.text ?? "", "--k", String(args?.k ?? 8), "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -491,7 +543,7 @@ async function pluginFactory(_input: any) {
           object: z.string().describe("object name"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const r = pai(["ask", args?.object ?? "", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -502,7 +554,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const r = pai(["info", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -514,7 +566,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const argv = ["stats"];
           if (args?.brain) argv.push("--brain", args.brain);
           argv.push("--json");
@@ -533,7 +585,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const argv = ["config"];
           if (args?.key) argv.push(args.key);
           if (args?.value) argv.push(args.value);
@@ -553,7 +605,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const argv = ["brain-test", ...(args?.brain ? ["--brain", args.brain] : []), "--k", String(args?.k ?? 3)];
           argv.push("--json");
           const r = pai(argv, { cwd: dir });
@@ -569,7 +621,7 @@ async function pluginFactory(_input: any) {
         // its cwd, so without it this probe health-checks whatever directory
         // the service happens to run in — not this project's embedding server.
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const r = pai(["llm-stat", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -581,7 +633,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const r = pai(["llm-setup", "--tier", args?.tier || "3", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -596,7 +648,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const argv = ["update"];
           if (args?.check) argv.push("--check");
           if (args?.pin) argv.push("--pin", String(args.pin));
@@ -615,7 +667,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const argv = ["delete"];
           if (args?.brain) argv.push("--brain", args.brain);
           if (args?.force) argv.push("--force");
@@ -639,7 +691,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const argv = ["query"];
           const qtext = args?.text || args?.query;
           if (qtext) argv.push(qtext);
@@ -661,7 +713,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const r = pai(["prune", "--json"], { cwd: dir });
           return JSON.stringify(r.ok ? r.json : { error: r.error });
         },
@@ -675,7 +727,7 @@ async function pluginFactory(_input: any) {
           dir: z.string().optional().describe("project directory"),
         },
         execute: async (args: any, ctx: any) => {
-          const dir = toolDir(args, ctx);
+          const dir = await resolveToolDir(args, ctx);
           const argv = ["consolidate", args?.text || ""];
           if (args?.arousal !== undefined) argv.push("--arousal", String(args.arousal));
           if (args?.brain) argv.push("--brain", args.brain);
@@ -787,20 +839,24 @@ export async function handleV2Event(ev: any) {
     // --- stable v2 vocabulary: session.* events (only vocabulary on 2.0.2+ service) ---
     if (t === "session.text.ended") {
       const txt = typeof props.text === "string" ? props.text : "";
-      const d = props.directory || evDir || (await sessionDir(props.sessionID)) || projectRoot() || projectDir() || cwd;
+      const d = props.directory || evDir || (await sessionDir(ctxSessionID(props))) ||
+        projectRoot() || projectDir() || cwd;
       await ingestAssistantOnce(txt, d, t);
       return;
     }
     if (t === "session.compacted" || t === "session.compaction.ended") {
-      const cdir = props.directory || evDir || projectRoot() || projectDir() || cwd;
       const sessionID = props.sessionID || v2get(props, ["session", "id"], ["id"]) || "";
+      const cdir = props.directory || evDir || (await sessionDir(String(sessionID))) ||
+        projectRoot() || projectDir() || cwd;
       markCompacted(String(sessionID));
       void compactBrain(cdir, String(sessionID));
       return;
     }
     if (t === "session.execution.succeeded") return; // terminal noise, nothing to do
     if (t === "session.created") {
-      const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) || evDir || projectRoot() || projectDir() || cwd;
+      const dir = v2get(props, ["directory"], ["info", "directory"], ["session", "directory"]) ||
+        evDir || (await sessionDir(props.sessionID || v2get(props, ["session", "id"], ["id"]))) ||
+        projectRoot() || projectDir() || cwd;
       const probe = pai(["info", "--json"], { cwd: dir });
       logIngest("v2 session.created info probe dir=" + dir + " ok=" + probe.ok);
       return;
@@ -816,9 +872,12 @@ export async function handleV2Event(ev: any) {
       const delta = v2get(props, ["delta"], ["part", "delta"]);
       if (typeof delta === "string" && delta) parts.push(delta);
       if (parts.length === 0) return;
+      const sid = ctxSessionID(props) ||
+        v2get(props, ["message", "sessionID"], ["part", "sessionID"]);
       await ingestAssistantOnce(
         parts.join("\n"),
-        v2get(props, ["directory"], ["session", "directory"]) || evDir || projectRoot() || projectDir() || cwd,
+        v2get(props, ["directory"], ["session", "directory"]) || evDir ||
+          (await sessionDir(sid)) || projectRoot() || projectDir() || cwd,
         t,
       );
       return;
@@ -840,7 +899,7 @@ export async function setupV2(ctx: any) {
     trusted: Boolean(envRoot) ||
       (locRoot !== undefined && hostRoot === locRoot && !isNoiseDir(locRoot)),
   });
-  setPosClient(ctx && ctx.client);
+  setPosClient(ctx && (ctx.client || ctx.session));
   // Fix 11 diagnostics: beta builds may pass an empty ctx — surface exactly
   // what is available so the global-install root question is answerable.
   // JSON.stringify hides getters/class props, so probe keys + candidate reads.

@@ -130,12 +130,26 @@ positronic update --tail 50 --json         # {"logTail":[...]}
     `ctx` keys, per-field probes, and env/config presence.
   - **`toolDir()` consults `projectRoot()`** (Fix 11) — previously tools ignored
     the env var entirely.
+  - **Tool calls resolve per session (Fix 14).** A shared daemon calls `setup()`
+    once per project, but `__posProjectRoot` is one global slot: the last setup
+    won, so a tool call in project A could read/write project B's brain (see
+    issue #1, `sun-portal` returned from a `sure-state` session). Every tool now
+    resolves its cwd with `resolveToolDir(args, ctx)`:
+    `args.dir` → `sessionDir(ctx.sessionID)` → `ctx.location`/`.project` →
+    `directory`/`worktree` → global fallbacks. When a session's project has no
+    `.positronic/`, PAI answers with an explicit empty brain list / "no such
+    brain db" for that project — it never falls through to another project.
+    `POSITRONIC_PROJECT_DIR` and `~/.config/positronic/project` are
+    **single-project fallbacks only**, used when no session dir is available
+    (e.g. a build that omits `ctx.client`).
   - `projectDir()` claims a dir only if it contains `.positronic/` (a global
     install's 3×dirname points at a wrong-but-existent dir that would shadow
     `cwd`); rejection is logged.
-  - `sessionDir()` looks up a session's dir via the SDK client and **caches
-    `sessionID→dir`**; logs `sessionDir: no client` once if the build omits it
-    (beta-17823 does — `client=undefined`).
+  - `sessionDir()` looks up a session's dir **per call** and **caches
+    `sessionID→dir`**; it speaks both host shapes — the 1.18/early-v2 client
+    (`client.session.get({ path: { id } })` → `{ data: { directory } }`) and the
+    v2.3+ plugin context (`ctx.session.get({ sessionID })` → `SessionInfo.location.directory`).
+    Logs `sessionDir: no client` once if the build omits both.
   - **Override for a global install / daemon started outside the project**: set
     `POSITRONIC_PROJECT_DIR=/path/to/project`, or write the path to
     `~/.config/positronic/project`. On beta-17823 the `ctx.location.directory`
@@ -156,7 +170,7 @@ positronic update --tail 50 --json         # {"logTail":[...]}
     live: a sure-mail session ingesting into `/usr/local/devel/pentest`,
     dropped there as `live=false`). No event location → the chain above,
     unchanged.
-  - `positronic.llm-stat` / `llm-setup` spawn PAI with `cwd: toolDir()`, so
+  - `positronic.llm-stat` / `llm-setup` spawn PAI with `cwd: resolveToolDir()`, so
     the bge probe reads **this** project's `embed.local_url` instead of
     health-checking whatever directory the service happens to run in.
 - Plugin `src/index.ts` registers `TuiCommand slash:{name:"positronic:*"}` (12 slashes) and `tool: Record<string,ToolDefinition>` `positronic.init|info|stats|config|brain-test|llm-stat|llm-setup|update|delete|query|prune|consolidate` (plus legacy `positronic.recall|ask` thin wrappers over same `activate`/`object_sighting` handlers).
